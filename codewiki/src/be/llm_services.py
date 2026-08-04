@@ -207,7 +207,48 @@ def call_llm(
             )
         else:
             raise
-    return response.choices[0].message.content
+    return _extract_response_text(response, model, config.max_tokens)
+
+
+def _extract_response_text(response, model: str, max_tokens: int) -> str:
+    """
+    Pull the assistant text out of a chat completion, warning about truncation.
+
+    Two provider behaviours are handled here because they otherwise surface far
+    downstream as an unexplained parse failure:
+
+    * ``finish_reason == "length"`` means the reply was cut off at max_tokens.
+      Callers that parse structured output (module clustering) need this in the
+      log, or a truncated dict just looks like a malformed response.
+    * Reasoning models (kimi, deepseek-r1, ...) behind OpenAI-compatible proxies
+      put chain-of-thought in a non-standard ``reasoning_content`` field. If they
+      run out of budget while still reasoning, ``content`` comes back empty and
+      ``reasoning_content`` is the only text there is.
+    """
+    choice = response.choices[0]
+    text = choice.message.content or ""
+
+    if getattr(choice, "finish_reason", None) == "length":
+        logger.warning(
+            "Model %s hit its output token limit (max_tokens=%d) and the reply was "
+            "truncated. Raise it with `codewiki config set --max-tokens N` if "
+            "downstream parsing fails.",
+            model,
+            max_tokens,
+        )
+
+    if not text:
+        reasoning = getattr(choice.message, "reasoning_content", None) or ""
+        if reasoning:
+            logger.warning(
+                "Model %s returned no content, only reasoning tokens; using the "
+                "reasoning text as the response.",
+                model,
+            )
+            return reasoning
+        logger.warning("Model %s returned an empty response.", model)
+
+    return text
 
 
 def _is_unsupported_token_param_error(err: BadRequestError, param: str) -> bool:
@@ -253,7 +294,7 @@ def _call_llm_via_litellm(
         max_tokens=config.max_tokens,
         api_key=config.llm_api_key if config.provider != "bedrock" else None,
     )
-    return response.choices[0].message.content
+    return _extract_response_text(response, litellm_model, config.max_tokens)
 
 
 def _call_llm_via_azure(
@@ -285,4 +326,4 @@ def _call_llm_via_azure(
         temperature=temperature,
         max_tokens=config.max_tokens,
     )
-    return response.choices[0].message.content
+    return _extract_response_text(response, deployment, config.max_tokens)

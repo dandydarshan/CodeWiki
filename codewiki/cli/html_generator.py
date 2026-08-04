@@ -8,6 +8,7 @@ from typing import Optional, Dict, Any
 
 from codewiki.cli.utils.errors import FileSystemError
 from codewiki.cli.utils.fs import safe_write, safe_read
+from codewiki.src.diagram_controls import diagram_controls_css, diagram_controls_js
 
 
 class HTMLGenerator:
@@ -160,6 +161,9 @@ class HTMLGenerator:
             "{{MODULE_TREE_JSON}}": module_tree_json,
             "{{METADATA_JSON}}": metadata_json,
             "{{DOCS_BASE_PATH}}": docs_base_path,
+            # Embedded rather than linked: the export must stay one self-contained file.
+            "{{DIAGRAM_CONTROLS_CSS}}": diagram_controls_css(),
+            "{{DIAGRAM_CONTROLS_JS}}": diagram_controls_js(),
         }
         
         for placeholder, value in replacements.items():

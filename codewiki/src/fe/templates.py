@@ -3,6 +3,8 @@
 HTML templates for the CodeWiki web application.
 """
 
+from codewiki.src.diagram_controls import diagram_controls_css, diagram_controls_js
+
 # Web interface HTML template
 WEB_INTERFACE_TEMPLATE = """
 <!DOCTYPE html>
@@ -565,6 +567,17 @@ DOCS_VIEW_TEMPLATE = """
                 max-width: 100%;
             }
         }
+
+        .mermaid {
+            margin: 2rem 0;
+            padding: 1.5rem;
+            background: #fff;
+            border: 1px solid #e2e8f0;
+            border-radius: 0.5rem;
+            overflow-x: auto;
+        }
+
+/*__DIAGRAM_CONTROLS_CSS__*/
     </style>
 </head>
 <body>
@@ -673,8 +686,26 @@ DOCS_VIEW_TEMPLATE = """
         // Re-render mermaid diagrams after page load
         document.addEventListener('DOMContentLoaded', function() {
             mermaid.init(undefined, document.querySelectorAll('.mermaid'));
+            // mermaid.init is synchronous for the classic API, but yield once so
+            // the SVGs are in the DOM before we measure them.
+            setTimeout(function () {
+                if (window.CodeWikiDiagrams) {
+                    window.CodeWikiDiagrams.enhanceAll();
+                }
+            }, 0);
         });
+    </script>
+    <script>
+/*__DIAGRAM_CONTROLS_JS__*/
     </script>
 </body>
 </html>
 """
+
+# Injected after the fact so Jinja never parses the asset bodies, and so both
+# viewers share one copy of the controls.
+DOCS_VIEW_TEMPLATE = DOCS_VIEW_TEMPLATE.replace(
+    "/*__DIAGRAM_CONTROLS_CSS__*/", diagram_controls_css()
+).replace(
+    "/*__DIAGRAM_CONTROLS_JS__*/", diagram_controls_js()
+)

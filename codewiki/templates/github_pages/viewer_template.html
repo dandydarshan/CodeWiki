@@ -312,7 +312,9 @@
             border-radius: 0.5rem;
             overflow-x: auto;
         }
-        
+
+{{DIAGRAM_CONTROLS_CSS}}
+
         .loading {
             display: flex;
             flex-direction: column;
@@ -622,6 +624,12 @@
                     element.innerHTML = `<pre>Error rendering diagram:\n${element.textContent}</pre>`;
                 }
             }
+
+            // Add zoom / pan / fullscreen controls to the freshly rendered SVGs.
+            // Idempotent, so navigating between documents is safe.
+            if (window.CodeWikiDiagrams) {
+                window.CodeWikiDiagrams.enhanceAll();
+            }
         }
         
         function showError(message) {
@@ -637,6 +645,10 @@
                 </div>
             `;
         }
+    </script>
+
+    <script>
+{{DIAGRAM_CONTROLS_JS}}
     </script>
 </body>
 </html>

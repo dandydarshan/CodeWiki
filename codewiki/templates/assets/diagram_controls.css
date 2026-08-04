@@ -1,0 +1,135 @@
+/* Zoom / pan / fullscreen controls for rendered mermaid diagrams.
+   Shared by the GitHub Pages viewer and the web app docs view. */
+
+.mermaid[data-cw-enhanced] {
+    position: relative;
+    padding: 0;
+    overflow: hidden;
+}
+
+.cw-diagram-viewport {
+    position: relative;
+    overflow: hidden;
+    width: 100%;
+    min-height: 120px;
+    cursor: grab;
+    touch-action: none;
+    background: #fff;
+    border-radius: 0.5rem;
+}
+
+.cw-diagram-viewport.cw-panning {
+    cursor: grabbing;
+}
+
+.cw-diagram-canvas {
+    transform-origin: 0 0;
+    will-change: transform;
+    display: inline-block;
+}
+
+.cw-diagram-canvas > svg {
+    display: block;
+    max-width: none;
+}
+
+.cw-diagram-toolbar {
+    position: absolute;
+    top: 0.5rem;
+    right: 0.5rem;
+    display: flex;
+    align-items: center;
+    gap: 0.125rem;
+    padding: 0.1875rem;
+    background: rgba(255, 255, 255, 0.94);
+    border: 1px solid #e2e8f0;
+    border-radius: 0.5rem;
+    box-shadow: 0 1px 3px rgba(15, 23, 42, 0.1);
+    z-index: 5;
+}
+
+.cw-diagram-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 1.75rem;
+    height: 1.75rem;
+    padding: 0 0.375rem;
+    font: inherit;
+    font-size: 0.875rem;
+    line-height: 1;
+    color: #334155;
+    background: transparent;
+    border: 0;
+    border-radius: 0.375rem;
+    cursor: pointer;
+}
+
+.cw-diagram-btn:hover {
+    background: #f1f5f9;
+    color: #2563eb;
+}
+
+.cw-diagram-btn:focus-visible {
+    outline: 2px solid #2563eb;
+    outline-offset: 1px;
+}
+
+.cw-diagram-btn:disabled {
+    opacity: 0.4;
+    cursor: default;
+}
+
+.cw-diagram-btn:disabled:hover {
+    background: transparent;
+    color: #334155;
+}
+
+.cw-diagram-level {
+    min-width: 3.25rem;
+    font-variant-numeric: tabular-nums;
+    font-size: 0.75rem;
+    color: #64748b;
+}
+
+.cw-diagram-sep {
+    width: 1px;
+    height: 1rem;
+    margin: 0 0.125rem;
+    background: #e2e8f0;
+}
+
+/* Native fullscreen */
+.mermaid[data-cw-enhanced]:fullscreen {
+    padding: 0;
+    margin: 0;
+    border: 0;
+    border-radius: 0;
+    background: #fff;
+}
+
+.mermaid[data-cw-enhanced]:fullscreen .cw-diagram-viewport {
+    height: 100vh;
+    border-radius: 0;
+}
+
+/* Fallback for browsers that refuse the Fullscreen API */
+.mermaid[data-cw-enhanced].cw-diagram-pseudo-full {
+    position: fixed;
+    inset: 0;
+    z-index: 9999;
+    margin: 0;
+    border-radius: 0;
+    background: #fff;
+}
+
+.mermaid[data-cw-enhanced].cw-diagram-pseudo-full .cw-diagram-viewport {
+    height: 100vh;
+    border-radius: 0;
+}
+
+@media print {
+    .cw-diagram-toolbar {
+        display: none;
+    }
+}

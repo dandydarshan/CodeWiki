@@ -1,12 +1,20 @@
 import logging
 import os
 import json
+import re
 from typing import Dict, List, Any
 from copy import deepcopy
 import traceback
 
 # Configure logging and monitoring
 logger = logging.getLogger(__name__)
+
+# Overview synthesis embeds every 1-depth child doc in its prompt. Left
+# unbounded that grows with the repo until it overruns the model's context
+# window, so cap the embedded docs at the project's existing per-call context
+# yardstick (config.max_token_per_module) and trim the largest children first.
+_OVERVIEW_REASONING_RE = re.compile(r"<(think|thinking|reasoning)>.*?</\1>", re.DOTALL | re.IGNORECASE)
+_OVERVIEW_OPEN_REASONING_RE = re.compile(r"<(think|thinking|reasoning)>", re.IGNORECASE)
 
 # Local imports
 from codewiki.src.be.dependency_analyzer import DependencyGraphBuilder
@@ -30,6 +38,7 @@ from codewiki.src.be.module_naming import (
     find_missing_module_docs,
     resolve_module_doc_path,
 )
+from codewiki.src.be.utils import count_tokens, truncate_to_tokens
 from codewiki.src.utils import file_manager
 
 
@@ -130,15 +139,112 @@ class DocumentationGenerator:
         if "children" in module_info:
             module_info = module_info["children"]
 
+        child_docs: Dict[str, str] = {}
         for child_name, child_info in module_info.items():
             child_docs_path = self._resolve_child_docs_path(working_dir, child_name)
             if child_docs_path is not None:
-                child_info["docs"] = file_manager.load_text(child_docs_path)
+                child_docs[child_name] = file_manager.load_text(child_docs_path)
             else:
                 logger.warning(f"Module docs not found at {os.path.join(working_dir, f'{child_name}.md')}")
-                child_info["docs"] = ""
+                child_docs[child_name] = ""
+
+        for child_name, doc in self._fit_child_docs(child_docs).items():
+            module_info[child_name]["docs"] = doc
 
         return processed_module_tree
+
+    def _fit_child_docs(self, child_docs: Dict[str, str]) -> Dict[str, str]:
+        """
+        Trim embedded child docs so the overview prompt fits in one request.
+
+        Every child that already fits its fair share is kept whole and its
+        unused allowance is redistributed, so a handful of large modules are
+        trimmed instead of penalising every module equally.
+        """
+        budget = self.config.max_token_per_module
+        sizes = {name: count_tokens(doc) for name, doc in child_docs.items()}
+        total = sum(sizes.values())
+        if not sizes or total <= budget:
+            return child_docs
+
+        remaining = budget
+        pending = set(sizes)
+        allowances: Dict[str, int] = {}
+        while pending:
+            share = remaining // len(pending)
+            fits = [name for name in pending if sizes[name] <= share]
+            if not fits:
+                # Everything left is oversized: split what's left evenly.
+                allowances.update({name: share for name in pending})
+                break
+            for name in fits:
+                allowances[name] = sizes[name]
+                remaining -= sizes[name]
+                pending.discard(name)
+
+        trimmed = {
+            name: truncate_to_tokens(doc, allowances.get(name, 0))
+            for name, doc in child_docs.items()
+        }
+        shortened = sorted(name for name in sizes if sizes[name] > allowances.get(name, 0))
+        logger.warning(
+            "Child documentation for overview synthesis is %d tokens, above the "
+            "%d-token budget; trimmed %d of %d module doc(s) to fit: %s. Raise "
+            "--max-token-per-module if your model has room for more context.",
+            total,
+            budget,
+            len(shortened),
+            len(sizes),
+            ", ".join(shortened),
+        )
+        return trimmed
+
+    @staticmethod
+    def _extract_overview_content(response: str, module_name: str) -> str:
+        """
+        Pull the markdown out of an overview reply, tolerating truncation.
+
+        A reply cut off at the output limit never emits ``</OVERVIEW>``. Writing
+        the raw response in that case would embed the opening tag and any
+        reasoning preamble straight into the published doc, so strip both and
+        keep whatever body arrived.
+        """
+        if not response or not response.strip():
+            logger.error("Overview response for %s was empty; no documentation written.", module_name)
+            return ""
+
+        body = _OVERVIEW_REASONING_RE.sub("", response)
+        open_reasoning = _OVERVIEW_OPEN_REASONING_RE.search(body)
+        if open_reasoning:
+            # Cut off mid-thought: nothing after the tag is answer text.
+            body = body[: open_reasoning.start()]
+            logger.warning(
+                "Overview response for %s was cut off while the model was still "
+                "reasoning; the generated doc may be incomplete.",
+                module_name,
+            )
+
+        if "<OVERVIEW>" not in body:
+            # Subscription CLIs (claude-code / codex) often ignore the wrapper
+            # and return plain markdown - that case is fine as-is.
+            logger.warning(
+                "Overview response for %s missing <OVERVIEW> wrapper; using raw "
+                "response as markdown.",
+                module_name,
+            )
+            return body.strip()
+
+        content = body.split("<OVERVIEW>", 1)[1]
+        if "</OVERVIEW>" in content:
+            return content.split("</OVERVIEW>", 1)[0].strip()
+
+        logger.warning(
+            "Overview response for %s is missing the closing </OVERVIEW> tag - the "
+            "model ran out of output tokens. Keeping the partial overview; raise "
+            "--max-tokens for a complete one.",
+            module_name,
+        )
+        return content.strip()
 
     @staticmethod
     def _resolve_child_docs_path(working_dir: str, child_name: str) -> str | None:
@@ -284,21 +390,19 @@ class DocumentationGenerator:
             repo_structure=json.dumps(repo_structure, indent=4)
         )
         
+        logger.info(
+            "Overview prompt for %s: %d tokens.", module_name, count_tokens(prompt)
+        )
+
         try:
             parent_docs = self.backend.complete(prompt)
-
-            # Parse and save parent documentation. Subscription-CLI backends
-            # (claude-code / codex) sometimes ignore the <OVERVIEW> wrapper and
-            # return raw markdown; fall back to the response as-is in that case
-            # rather than crashing with an index error.
-            if "<OVERVIEW>" in parent_docs and "</OVERVIEW>" in parent_docs:
-                parent_content = parent_docs.split("<OVERVIEW>")[1].split("</OVERVIEW>")[0].strip()
-            else:
-                logger.warning(
-                    f"Overview response for {module_name} missing <OVERVIEW> wrapper; "
-                    f"using raw response as markdown."
+            parent_content = self._extract_overview_content(parent_docs, module_name)
+            if not parent_content:
+                # Writing an empty file here would satisfy the missing-docs check
+                # and ship a blank overview; fail loudly instead.
+                raise ValueError(
+                    f"Overview generation for {module_name} produced no content"
                 )
-                parent_content = parent_docs.strip()
             file_manager.save_text(parent_content, parent_docs_path)
             
             logger.debug(f"Successfully generated parent documentation for: {module_name}")

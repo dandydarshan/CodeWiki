@@ -59,6 +59,24 @@ def count_tokens(text: str) -> int:
     return length
 
 
+def truncate_to_tokens(text: str, max_tokens: int, marker: str = "\n\n[... truncated ...]") -> str:
+    """
+    Cut *text* down to at most *max_tokens* tokens, keeping the beginning.
+
+    Documentation puts its purpose and architecture up front, so the head is
+    what an overview synthesis actually needs. Returns the text unchanged when
+    it already fits.
+    """
+    if max_tokens <= 0:
+        return ""
+    tokens = enc.encode(text)
+    if len(tokens) <= max_tokens:
+        return text
+    marker_tokens = len(enc.encode(marker))
+    keep = max(max_tokens - marker_tokens, 0)
+    return enc.decode(tokens[:keep]) + marker
+
+
 # ------------------------------------------------------------
 # ---------------------- Mermaid Validation -----------------
 # ------------------------------------------------------------

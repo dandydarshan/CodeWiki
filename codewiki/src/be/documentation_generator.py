@@ -41,6 +41,7 @@ from codewiki.src.be.module_naming import (
     resolve_module_doc_path,
 )
 from codewiki.src.be.doc_state import node_at_path
+from codewiki.src.be.incremental import module_tree_rebuild_reason
 from codewiki.src.be.utils import count_tokens, truncate_to_tokens
 from codewiki.src.utils import file_manager
 
@@ -441,13 +442,10 @@ class DocumentationGenerator:
         module_tree_path = os.path.join(working_dir, MODULE_TREE_FILENAME)
         module_tree = file_manager.load_json(module_tree_path)
 
-        # check if overview docs already exists
-        overview_docs_path = os.path.join(working_dir, OVERVIEW_FILENAME)
-        if os.path.exists(overview_docs_path):
-            logger.info(f"✓ Overview docs already exists at {overview_docs_path}")
-            return module_tree
-
-        # check if parent docs already exists
+        # Check if this module's doc already exists. For the repo root that
+        # file *is* overview.md; for a nested parent it is its own name — an
+        # existing overview.md must not stand in for it, or a parent an
+        # incremental update invalidated would never be rewritten.
         parent_docs_path = os.path.join(working_dir, f"{module_name if len(module_path) >= 1 else OVERVIEW_FILENAME.replace('.md', '')}.md")
         if os.path.exists(parent_docs_path):
             logger.info(f"✓ Parent docs already exists at {parent_docs_path}")
@@ -503,11 +501,21 @@ class DocumentationGenerator:
             first_module_tree_path = os.path.join(working_dir, FIRST_MODULE_TREE_FILENAME)
             module_tree_path = os.path.join(working_dir, MODULE_TREE_FILENAME)
             
-            # Check if module tree exists
-            if os.path.exists(first_module_tree_path):
-                logger.debug(f"Module tree found at {first_module_tree_path}")
-                module_tree = file_manager.load_json(first_module_tree_path)
+            # Reuse the cached tree only while it still covers every source
+            # file; a repo that gained or lost files needs re-clustering or the
+            # new code would never be assigned to a module.
+            cached_tree = (
+                file_manager.load_json(first_module_tree_path)
+                if os.path.exists(first_module_tree_path)
+                else None
+            )
+            rebuild_reason = module_tree_rebuild_reason(cached_tree, leaf_nodes, components)
+            if cached_tree is not None and rebuild_reason is None:
+                logger.debug(f"Reusing cached module tree at {first_module_tree_path}")
+                module_tree = cached_tree
             else:
+                if cached_tree is not None:
+                    logger.info("Rebuilding module tree: %s", rebuild_reason)
                 logger.debug(f"Module tree not found at {module_tree_path}, clustering modules")
                 clustering_tokens = get_clustering_input_token_count(
                     leaf_nodes, components

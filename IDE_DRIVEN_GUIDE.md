@@ -225,6 +225,8 @@ The original CodeWiki CLI provided a `codewiki generate --update` incremental up
 
 This was fixed: the CLI adapter now passes `commit_id` correctly, and the MCP `close_session` tool writes `metadata.json` (with current git commit + timestamp) before cleaning up the workspace, establishing the baseline for future incremental detection.
 
+Both entry points now share one implementation, `codewiki/src/be/incremental.py`, so CLI and MCP agree on what changed. On the CLI side `--update` additionally rebuilds the module tree when files were added or removed (re-clustering, then mapping the new modules back onto the previous names so unchanged docs keep their filenames), regenerates only the modules whose components moved or whose files changed, cascades to their parents and `overview.md`, and deletes docs for modules that no longer exist.
+
 ### MCP Incremental Update Solution
 
 Incremental detection is built into the `analyze_repo` tool with a dual-strategy approach:

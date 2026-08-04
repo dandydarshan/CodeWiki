@@ -48,165 +48,63 @@ def _detect_changed_files(
     compare_to: Optional[str] = None
 ) -> Optional[List[str]]:
     """
-    Detect files changed since the last documentation generation.
+    Detect source files changed since the last documentation generation.
 
-    Reads the commit_id from metadata.json and compares with current HEAD
-    using git diff. When running inside a subdirectory of a monorepo,
-    only files under that subdirectory are returned.
+    Compares the commit recorded in metadata.json (or ``--compare-to``) with the
+    current working tree — committed diff plus staged, unstaged and untracked
+    files — falling back to file mtimes when git has no usable baseline. In a
+    monorepo subdirectory only files under that subdirectory are returned, with
+    the prefix stripped so paths line up with module_tree.json component IDs.
 
-    Returns list of changed file paths relative to repo_path, or None if
-    unable to determine (e.g., no metadata, not a git repo).
+    Returns paths relative to *repo_path*, or None when there is no baseline to
+    compare against (first run), meaning "generate everything".
     """
-    import json
+    from codewiki.src.be.incremental import detect_changed_files
 
-    prev_commit = None
-    if compare_to:
-        prev_commit = compare_to
-    else:
-        metadata_path = output_dir / "metadata.json"
-        if not metadata_path.exists():
-            if verbose:
-                logger.debug("No metadata.json found — cannot detect changes, running full generation.")
-            return None
-
-        try:
-            metadata = json.loads(metadata_path.read_text())
-            prev_commit = metadata.get("generation_info", {}).get("commit_id")
-            if not prev_commit:
-                if verbose:
-                    logger.debug("No commit_id in metadata — running full generation.")
-                return None
-        except (json.JSONDecodeError, OSError):
-            return None
-
-    # Get current HEAD commit
-    try:
-        import git
-        repo = git.Repo(repo_path, search_parent_directories=True)
-        current_commit = repo.head.commit.hexsha
-    except Exception:
+    changes = detect_changed_files(repo_path, output_dir, compare_to=compare_to)
+    if changes is None:
         if verbose:
-            logger.debug("Cannot access git repo — running full generation.")
+            logger.debug("No previous generation to compare against — running full generation.")
         return None
-
-    if prev_commit == current_commit:
-        if verbose:
-            logger.debug(f"HEAD is still at {current_commit[:8]} — no changes.")
-        return []
-
-    # Determine subdirectory prefix relative to the git root
-    if repo.working_tree_dir is None:
-        if verbose:
-            logger.debug("Bare git repository — running full generation.")
-        return None
-    git_root = Path(repo.working_tree_dir).resolve()
-    repo_path_resolved = repo_path.resolve()
-    try:
-        subpath_prefix = repo_path_resolved.relative_to(git_root).as_posix()
-    except ValueError:
-        # repo_path is outside git root — shouldn't happen, but fall back to full generation
-        if verbose:
-            logger.debug("Repo path is outside git root — running full generation.")
-        return None
-
-    # Get changed files between previous and current commit
-    try:
-        diff_index = repo.commit(prev_commit).diff(current_commit)
-        changed = []
-        for diff in diff_index:
-            if diff.a_path:
-                changed.append(diff.a_path)
-            if diff.b_path and diff.b_path != diff.a_path:
-                changed.append(diff.b_path)
-
-        # Filter to files under the current subdirectory and strip the prefix
-        # so paths align with module_tree.json component paths
-        filtered = []
-        if subpath_prefix == ".":
-            filtered = changed
-        else:
-            prefix = subpath_prefix + "/"
-            for path in changed:
-                if path.startswith(prefix):
-                    filtered.append(path[len(prefix):])
-
-        if verbose:
-            logger.debug(f"Changes between {prev_commit[:8]} and {current_commit[:8]}:")
-            if subpath_prefix != ".":
-                logger.debug(f"  Scoped to subdirectory: {subpath_prefix}")
-            for f in filtered[:10]:
-                logger.debug(f"  {f}")
-            if len(filtered) > 10:
-                logger.debug(f"  ... and {len(filtered) - 10} more")
-
-        return filtered
-    except Exception as e:
-        if verbose:
-            logger.debug(f"Git diff failed: {e} — running full generation.")
-        return None
-
-
-def _invalidate_affected_modules(
-    output_dir: Path,
-    changed_files: List[str],
-    logger,
-    verbose: bool
-):
-    """
-    Remove cached module documentation for modules that contain changed files.
-
-    Reads module_tree.json to find which modules contain changed files,
-    then deletes their .md files so they get regenerated.
-    """
-    import json
-
-    module_tree_path = output_dir / "module_tree.json"
-    if not module_tree_path.exists():
-        return
-
-    try:
-        module_tree = json.loads(module_tree_path.read_text())
-    except (json.JSONDecodeError, OSError):
-        return
-
-    changed_set = set(changed_files)
-    modules_to_invalidate = set()
-
-    def _find_affected(tree, parent_names=None):
-        if parent_names is None:
-            parent_names = []
-        for mod_name, mod_info in tree.items():
-            components = mod_info.get("components", [])
-            # Check if any component path overlaps with changed files
-            for comp in components:
-                # Component IDs may be class names, check if they match any changed file path
-                if any(changed_file in comp or comp in changed_file for changed_file in changed_set):
-                    modules_to_invalidate.add(mod_name)
-                    # Also invalidate parent modules
-                    for parent in parent_names:
-                        modules_to_invalidate.add(parent)
-                    break
-
-            children = mod_info.get("children", {})
-            if isinstance(children, dict) and children:
-                _find_affected(children, parent_names + [mod_name])
-
-    _find_affected(module_tree)
-
-    # Also remove overview.md since it depends on child docs
-    if modules_to_invalidate:
-        modules_to_invalidate.add("overview")
-
-    # Delete affected module docs
-    for mod_name in modules_to_invalidate:
-        doc_path = output_dir / f"{mod_name}.md"
-        if doc_path.exists():
-            doc_path.unlink()
-            if verbose:
-                logger.debug(f"Invalidated: {doc_path.name}")
 
     if verbose:
-        logger.debug(f"Invalidated {len(modules_to_invalidate)} modules for regeneration.")
+        baseline = changes.baseline or "previous generation"
+        if changes.method == "git":
+            baseline = baseline[:8]
+        logger.debug(f"Changes since {baseline} (detected via {changes.method}):")
+        for path in changes.files[:10]:
+            logger.debug(f"  {path}")
+        if len(changes.files) > 10:
+            logger.debug(f"  ... and {len(changes.files) - 10} more")
+
+    return changes.files
+
+
+def _clear_generated_docs(output_dir: Path, logger, verbose: bool) -> None:
+    """
+    Remove CodeWiki's own output so --no-cache really regenerates everything.
+
+    Generation resumes by skipping modules whose ``.md`` already exists and by
+    reusing the cached module tree, so "ignore cache" has to mean deleting those
+    artifacts. Only files CodeWiki generates are touched.
+    """
+    targets = sorted(output_dir.glob("*.md"))
+    for name in ("module_tree.json", "first_module_tree.json"):
+        candidate = output_dir / name
+        if candidate.exists():
+            targets.append(candidate)
+
+    for path in targets:
+        try:
+            path.unlink()
+        except OSError as e:
+            logger.warning(f"Could not remove {path.name}: {e}")
+            continue
+        if verbose:
+            logger.debug(f"Removed cached artifact: {path.name}")
+
+    if targets:
+        logger.info(f"  --no-cache: cleared {len(targets)} cached artifact(s) from {output_dir}")
 
 
 @click.command(name="generate")
@@ -310,7 +208,7 @@ def _invalidate_affected_modules(
 @click.option(
     "--update",
     is_flag=True,
-    help="Incremental update: only regenerate modules affected by changes since last generation",
+    help="Incremental update: rebuild only the modules whose sources changed since the last generation (committed or not)",
 )
 @click.option(
     "--compare-to",
@@ -357,7 +255,15 @@ def generate_command(
     $ codewiki generate --create-branch --github-pages
     
     \b
-    # Force full regeneration
+    # Only re-document what changed since the last run
+    $ codewiki generate --update
+
+    \b
+    # Same, but diff against a specific commit
+    $ codewiki generate --compare-to abc1234
+
+    \b
+    # Force full regeneration (clears cached tree and existing docs)
     $ codewiki generate --no-cache
 
     \b
@@ -450,17 +356,26 @@ def generate_command(
         if compare_to:
             update = True
 
-        # Incremental update: detect changed files and selectively regenerate
+        # --no-cache means a full rebuild, so incremental reuse cannot apply.
+        if update and no_cache:
+            logger.warning("--no-cache forces a full regeneration; ignoring --update.")
+            update = False
+
+        # Incremental update: detect changed files. Which modules that
+        # invalidates is decided after clustering, once the current module tree
+        # is known — a file can only be mapped to a module that still exists.
         changed_files = None
+        incremental = False
         if update and output_dir.exists():
             changed_files = _detect_changed_files(repo_path, output_dir, logger, verbose, compare_to=compare_to)
-            if changed_files is not None and len(changed_files) == 0:
-                logger.success("No changes detected since last generation. Documentation is up to date.")
-                sys.exit(EXIT_SUCCESS)
-            if changed_files is not None:
-                logger.info(f"  Detected {len(changed_files)} changed files — regenerating affected modules.")
-                # Remove cached module docs for affected files so they get regenerated
-                _invalidate_affected_modules(output_dir, changed_files, logger, verbose)
+            if changed_files is None:
+                logger.warning("No previous generation found to update — generating from scratch.")
+            else:
+                incremental = True
+                if changed_files:
+                    logger.info(f"  Detected {len(changed_files)} changed file(s) since the last generation.")
+                else:
+                    logger.info("  No source changes detected; only missing or stale docs will be rebuilt.")
 
         # Check for existing documentation
         if not update and output_dir.exists() and list(output_dir.glob("*.md")):
@@ -470,6 +385,9 @@ def generate_command(
             ):
                 logger.info("Generation cancelled by user.")
                 sys.exit(EXIT_SUCCESS)
+
+        if no_cache and output_dir.exists():
+            _clear_generated_docs(output_dir, logger, verbose)
         
         # Git branch creation (if requested)
         branch_name = None
@@ -501,14 +419,14 @@ def generate_command(
         logger.step("Generating documentation...", 4, 4)
         click.echo()
         
-        # Create generation options
+        # Record how this run was invoked; attached to the job below.
         generation_options = GenerationOptions(
             create_branch=create_branch,
             github_pages=github_pages,
             no_cache=no_cache,
             custom_output=output if output != "docs" else None
         )
-        
+
         # Create runtime agent instructions from CLI options
         runtime_instructions = None
         if any([include, exclude, focus, doc_type, instructions]):
@@ -589,8 +507,12 @@ def generate_command(
             verbose=verbose,
             generate_html=github_pages,
             commit_id=commit_id,
+            incremental=incremental,
+            changed_files=changed_files,
+            no_cache=no_cache,
         )
-        
+        generator.job.generation_options = generation_options
+
         # Run generation
         job = generator.generate()
         

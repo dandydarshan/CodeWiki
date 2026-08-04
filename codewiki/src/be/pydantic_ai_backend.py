@@ -72,10 +72,15 @@ class PydanticAIBackend(LLMBackend):
         module_tree_path = os.path.join(working_dir, MODULE_TREE_FILENAME)
         module_tree = file_manager.load_json(module_tree_path)
 
-        overview_docs_path = os.path.join(working_dir, OVERVIEW_FILENAME)
-        if os.path.exists(overview_docs_path):
-            logger.info("✓ Overview docs already exists at %s", overview_docs_path)
-            return module_tree
+        # Whole-repository mode writes its single doc as overview.md, so that
+        # file is this run's resume marker. For a module inside a tree it says
+        # nothing — treating it as one would skip every module whose own doc is
+        # missing, which is exactly what an incremental update needs rebuilt.
+        if not module_path:
+            overview_docs_path = os.path.join(working_dir, OVERVIEW_FILENAME)
+            if os.path.exists(overview_docs_path):
+                logger.info("✓ Overview docs already exists at %s", overview_docs_path)
+                return module_tree
         docs_path = os.path.join(working_dir, f"{module_name}.md")
         if os.path.exists(docs_path):
             logger.info("✓ Module docs already exists at %s", docs_path)

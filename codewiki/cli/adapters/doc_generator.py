@@ -39,10 +39,13 @@ class CLIDocumentationGenerator:
         verbose: bool = False,
         generate_html: bool = False,
         commit_id: str = None,
+        incremental: bool = False,
+        changed_files: list = None,
+        no_cache: bool = False,
     ):
         """
         Initialize the CLI documentation generator.
-        
+
         Args:
             repo_path: Repository path
             output_dir: Output directory
@@ -50,6 +53,9 @@ class CLIDocumentationGenerator:
             verbose: Enable verbose output
             generate_html: Whether to generate HTML viewer
             commit_id: Git commit SHA for incremental update tracking
+            incremental: Reuse docs for modules whose sources did not change
+            changed_files: Repo-relative paths changed since the last generation
+            no_cache: Ignore the cached module tree and re-cluster from scratch
         """
         self.repo_path = repo_path
         self.output_dir = output_dir
@@ -57,6 +63,9 @@ class CLIDocumentationGenerator:
         self.verbose = verbose
         self.generate_html = generate_html
         self.commit_id = commit_id
+        self.incremental = incremental
+        self.changed_files = changed_files or []
+        self.no_cache = no_cache
         self.progress_tracker = ProgressTracker(total_stages=5, verbose=verbose)
         self.job = DocumentationJob()
         
@@ -174,6 +183,50 @@ class CLIDocumentationGenerator:
             self.job.fail(str(e))
             raise
     
+    def _apply_incremental_plan(
+        self,
+        previous_full_tree: Dict[str, Any],
+        module_tree: Dict[str, Any],
+        working_dir: str,
+    ) -> Dict[str, Any]:
+        """Drop the docs an incremental update invalidates, keep the rest.
+
+        Generation resumes by skipping any module whose ``.md`` already exists,
+        so deleting exactly the stale docs is what makes ``--update`` selective:
+        whatever survives here is reused verbatim.  Returns the tree to persist,
+        with the previous run's sub-module branches preserved under every reused
+        module.
+        """
+        import click
+
+        from codewiki.src.be.incremental import (
+            apply_update_plan,
+            carry_over_children,
+            plan_incremental_update,
+        )
+
+        plan = plan_incremental_update(
+            previous_full_tree, module_tree, self.changed_files, working_dir
+        )
+        removed_docs = apply_update_plan(plan, working_dir)
+
+        if plan.is_noop:
+            click.echo("  Incremental update: all module docs are already current.")
+        else:
+            click.echo(
+                f"  Incremental update: regenerating {len(plan.regenerate)} module(s), "
+                f"reusing {len(plan.reuse)}, dropping {len(plan.removed)} stale doc(s)."
+            )
+            if self.verbose:
+                for name in sorted(plan.regenerate | plan.removed):
+                    self.progress_tracker.update_stage(
+                        0.9, f"  {name}: {plan.reasons.get(name, 'changed')}"
+                    )
+                for filename in removed_docs:
+                    self.progress_tracker.update_stage(0.9, f"  removed {filename}")
+
+        return carry_over_children(module_tree, previous_full_tree, plan.reuse)
+
     async def _run_backend_generation(self, backend_config: BackendConfig):
         """Run the backend documentation generation with progress tracking."""
         
@@ -208,9 +261,7 @@ class CLIDocumentationGenerator:
         
         # Stage 2: Module Clustering
         self.progress_tracker.start_stage(2, "Module Clustering")
-        if self.verbose:
-            self.progress_tracker.update_stage(0.5, "Clustering modules with LLM...")
-        
+
         # Import clustering function
         from codewiki.src.be.cluster_modules import (
             cluster_modules,
@@ -218,18 +269,35 @@ class CLIDocumentationGenerator:
         )
         from codewiki.src.utils import file_manager
         from codewiki.src.config import FIRST_MODULE_TREE_FILENAME, MODULE_TREE_FILENAME
+        from codewiki.src.be.incremental import (
+            align_module_names,
+            module_tree_rebuild_reason,
+        )
 
         working_dir = str(self.output_dir.absolute())
         file_manager.ensure_directory(working_dir)
         first_module_tree_path = os.path.join(working_dir, FIRST_MODULE_TREE_FILENAME)
         module_tree_path = os.path.join(working_dir, MODULE_TREE_FILENAME)
 
+        # The expanded tree from the previous run: it carries the sub-modules
+        # that sub-agents discovered, which the flat clustered tree does not.
+        previous_full_tree = file_manager.load_json(module_tree_path) if os.path.exists(module_tree_path) else None
+        cached_tree = file_manager.load_json(first_module_tree_path) if os.path.exists(first_module_tree_path) else None
+        if self.no_cache:
+            cached_tree = None
+            previous_full_tree = None
+
         try:
-            if os.path.exists(first_module_tree_path):
-                module_tree = file_manager.load_json(first_module_tree_path)
+            rebuild_reason = module_tree_rebuild_reason(cached_tree, leaf_nodes, components)
+            if cached_tree is not None and rebuild_reason is None:
+                module_tree = cached_tree
                 if self.verbose:
-                    self.progress_tracker.update_stage(0.5, "Loaded cached module tree")
+                    self.progress_tracker.update_stage(0.5, "Reusing cached module tree (source file set unchanged)")
             else:
+                if cached_tree is not None and self.verbose:
+                    self.progress_tracker.update_stage(
+                        0.25, f"Rebuilding module tree: {rebuild_reason}"
+                    )
                 if self.verbose:
                     clustering_tokens = get_clustering_input_token_count(
                         leaf_nodes, components
@@ -263,9 +331,19 @@ class CLIDocumentationGenerator:
                 # key whose .md already exists would orphan the doc.
                 from codewiki.src.be.module_naming import dedupe_module_tree_names
                 module_tree = dedupe_module_tree_names(module_tree)
+                if self.incremental:
+                    # Names are doc filenames: keep the ones a previous run
+                    # chose so unchanged modules keep their docs.
+                    module_tree = align_module_names(cached_tree or previous_full_tree, module_tree)
                 file_manager.save_json(module_tree, first_module_tree_path)
 
-            file_manager.save_json(module_tree, module_tree_path)
+            final_tree = module_tree
+            if self.incremental and previous_full_tree:
+                final_tree = self._apply_incremental_plan(
+                    previous_full_tree, module_tree, working_dir
+                )
+
+            file_manager.save_json(final_tree, module_tree_path)
             self.job.module_count = len(module_tree)
 
             if self.verbose:

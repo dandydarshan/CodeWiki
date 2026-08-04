@@ -40,6 +40,7 @@ htmlcov/
 .hypothesis/
 tests/*
 !tests/test_gitignore_filtering.py
+!tests/test_incremental_update.py
 
 # Jupyter
 *.ipynb

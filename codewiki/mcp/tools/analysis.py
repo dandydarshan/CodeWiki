@@ -11,12 +11,15 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, Optional
 
 from codewiki.mcp.session import SessionState, SessionStore
 from codewiki.mcp.workspace import SessionWorkspace
+# Change detection is shared with `codewiki generate --update`; keeping one
+# implementation is what stops the CLI and the MCP server from disagreeing
+# about what changed.
+from codewiki.src.be import incremental
 
 logger = logging.getLogger(__name__)
 
@@ -46,37 +49,29 @@ def _detect_changes(
         return None
 
     try:
-        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
         module_tree = json.loads(module_tree_path.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, OSError, UnicodeDecodeError):
         return None
 
-    # Try git-based detection first
-    changes = _detect_via_git(repo_path, metadata, output_dir)
-
-    # Fallback to mtime-based detection
-    if changes is None:
-        changes = _detect_via_mtime(repo_path, metadata)
-
+    changes = incremental.detect_changed_files(repo_path, output_dir)
     if changes is None:
         return None
 
-    changed_files = changes["changed_files"]
-    if not changed_files:
+    if not changes.files:
         return {
             "has_previous": True,
             "no_changes": True,
-            "method": changes.get("method", "unknown"),
+            "method": changes.method,
             "message": "No changes detected since last generation. Documentation is up to date.",
         }
 
-    affected, cascade = _find_affected_modules(module_tree, changed_files)
+    affected, cascade = incremental.find_affected_modules(module_tree, changes.files)
 
     return {
         "has_previous": True,
         "no_changes": False,
-        "method": changes.get("method", "unknown"),
-        "changed_files": changed_files,
+        "method": changes.method,
+        "changed_files": changes.files,
         "affected_modules": sorted(affected),
         "cascade_modules": sorted(cascade),
         "hint": (
@@ -85,198 +80,6 @@ def _detect_changes(
             "Use edit_doc_file for targeted updates, write_doc_file for new modules."
         ),
     }
-
-
-def _detect_via_git(
-    repo_path: Path,
-    metadata: Dict[str, Any],
-    output_dir: Path | None = None,
-) -> Optional[Dict[str, Any]]:
-    """Detect changes via git. Returns None if not in a git repo or if no
-    previous commit is recorded (so the caller can fall through to mtime).
-
-    Checks committed changes (diff against stored commit_id), staged changes
-    (``index.diff('HEAD')``), and unstaged/untracked changes.
-    """
-    try:
-        import git
-        repo = git.Repo(repo_path, search_parent_directories=True)
-    except Exception:
-        return None
-
-    prev_commit = metadata.get("generation_info", {}).get("commit_id")
-    if not prev_commit:
-        return None  # No baseline to compare; let mtime fallback handle it
-
-    try:
-        current_commit = repo.head.commit.hexsha
-    except Exception:
-        return None
-
-    # Compute subpath prefix for monorepo support.
-    # Git diff returns paths relative to the git root, but component IDs
-    # use paths relative to repo_path.  Strip the prefix so they align.
-    git_root = Path(repo.working_dir).resolve()
-    repo_root = repo_path.resolve()
-    try:
-        subpath = repo_root.relative_to(git_root).as_posix()
-    except ValueError:
-        subpath = ""
-    if subpath == ".":
-        subpath = ""
-
-    # Output-dir prefix (relative to repo_path) so generated docs, metadata
-    # and session workspace files never count as source changes.
-    output_dir_rel = ""
-    if output_dir is not None:
-        try:
-            output_dir_rel = Path(output_dir).resolve().relative_to(repo_root).as_posix()
-            if output_dir_rel == ".":
-                output_dir_rel = ""
-        except (ValueError, TypeError):
-            pass
-
-    def _normalize(p: str) -> Optional[str]:
-        """Strip the monorepo subpath and drop generated/non-source paths."""
-        if subpath:
-            if not p.startswith(subpath + "/"):
-                return None  # outside target subdirectory
-            p = p[len(subpath) + 1:]
-        if p.startswith(".codewiki/"):
-            return None
-        if output_dir_rel and (p == output_dir_rel or p.startswith(output_dir_rel + "/")):
-            return None
-        return p
-
-    changed: list[str] = []
-    seen: set[str] = set()
-
-    def _add(raw: Optional[str]) -> None:
-        if raw:
-            p = _normalize(raw)
-            if p and p not in seen:
-                changed.append(p)
-                seen.add(p)
-
-    # 1) Committed changes since last generation
-    if prev_commit != current_commit:
-        try:
-            diff_index = repo.commit(prev_commit).diff(current_commit)
-        except Exception:
-            # Baseline commit unreachable (shallow clone, rebase, gc).
-            # Committed changes can't be enumerated, and returning an empty
-            # list here would falsely report "up to date" on a clean tree —
-            # fall back to mtime detection instead.
-            logger.warning(
-                "Stored commit %s is unreachable in %s; falling back to mtime detection",
-                prev_commit, repo_path,
-            )
-            return None
-        for diff in diff_index:
-            for p in (diff.a_path, diff.b_path):
-                _add(p)
-
-    # 2) Uncommitted changes: staged (index vs HEAD) + unstaged (working tree vs index) + untracked
-    try:
-        for d in list(repo.index.diff("HEAD")) + list(repo.index.diff(None)):
-            _add(d.a_path)
-            _add(d.b_path)
-        for item in repo.untracked_files:
-            _add(item)
-    except Exception:
-        pass
-
-    return {"changed_files": changed, "method": "git"}
-
-
-def _detect_via_mtime(
-    repo_path: Path,
-    metadata: Dict[str, Any],
-) -> Optional[Dict[str, Any]]:
-    """Fallback: detect changed files by comparing mtime with generation timestamp."""
-    timestamp_str = metadata.get("generation_info", {}).get("timestamp")
-    if not timestamp_str:
-        return None
-
-    try:
-        from datetime import datetime
-        prev_time = datetime.fromisoformat(timestamp_str).timestamp()
-    except (ValueError, TypeError):
-        return None
-
-    # Language extensions recognized by CodeWiki
-    source_extensions = {
-        ".py", ".java", ".js", ".jsx", ".ts", ".tsx",
-        ".c", ".h", ".cpp", ".hpp", ".cc", ".hh",
-        ".cs", ".kt", ".kts",
-    }
-
-    changed: list[str] = []
-    for dirpath, dirnames, filenames in os.walk(repo_path):
-        # Skip hidden dirs and common non-source dirs
-        dirnames[:] = [
-            d for d in dirnames
-            if not d.startswith(".") and d not in ("node_modules", "__pycache__", "venv", ".venv")
-        ]
-        for filename in filenames:
-            filepath = Path(dirpath) / filename
-            if filepath.suffix.lower() not in source_extensions:
-                continue
-            try:
-                if filepath.stat().st_mtime > prev_time:
-                    rel_path = filepath.relative_to(repo_path).as_posix()
-                    changed.append(rel_path)
-            except OSError:
-                continue
-
-    return {"changed_files": changed, "method": "mtime"}
-
-
-def _find_affected_modules(
-    module_tree: Dict[str, Any],
-    changed_files: List[str],
-) -> Tuple[set, set]:
-    """Map changed files to affected modules using module_tree.json.
-
-    Uses substring matching (same as the CLI ``_invalidate_affected_modules``).
-    Returns (affected_modules, cascade_parent_modules).
-    """
-    affected: set[str] = set()
-    cascade: set[str] = set()
-
-    def _walk(tree: Dict, parents: list[str] | None = None):
-        if parents is None:
-            parents = []
-        for mod_name, mod_info in tree.items():
-            components = mod_info.get("components", [])
-            hit = False
-            for comp in components:
-                comp_file = comp.split("::")[0]
-                for cf in changed_files:
-                    if comp_file == cf or comp_file.endswith("/" + cf) or cf.endswith("/" + comp_file):
-                        hit = True
-                        break
-                    # Changed dir contains the component file, or vice versa
-                    if cf.startswith(comp_file + "/") or comp_file.startswith(cf + "/"):
-                        hit = True
-                        break
-                if hit:
-                    break
-            if hit:
-                affected.add(mod_name)
-                cascade.update(parents)
-
-            children = mod_info.get("children", {})
-            if isinstance(children, dict) and children:
-                _walk(children, parents + [mod_name])
-
-    _walk(module_tree)
-
-    # overview.md depends on all child docs, always refresh if anything changed
-    if affected:
-        cascade.add("overview")
-
-    return affected, cascade
 
 
 def handle_analyze_repo(

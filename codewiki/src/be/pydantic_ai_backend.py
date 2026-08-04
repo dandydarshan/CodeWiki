@@ -30,6 +30,7 @@ from codewiki.src.be.prompt_template import (
     format_user_prompt,
 )
 from codewiki.src.be.utils import is_complex_module
+from codewiki.src.be.doc_state import ModuleTreeCoordinator
 from codewiki.src.config import MODULE_TREE_FILENAME, OVERVIEW_FILENAME, Config
 from codewiki.src.utils import file_manager
 
@@ -39,10 +40,16 @@ logger = logging.getLogger(__name__)
 class PydanticAIBackend(LLMBackend):
     """API-key based backend using pydantic-ai + openai/litellm clients."""
 
+    # Everything mutable this backend touches per module (the module tree file
+    # and sub-module name allocation) goes through ModuleTreeCoordinator, so
+    # sibling modules can be documented concurrently.
+    supports_parallel_modules = True
+
     def __init__(self, config: Config) -> None:
         self._config = config
         self._fallback_models = create_fallback_models(config)
         self._custom_instructions = config.get_prompt_addition()
+        self._coordinator = ModuleTreeCoordinator()
 
     def complete(
         self,
@@ -107,6 +114,7 @@ class PydanticAIBackend(LLMBackend):
             current_depth=1,
             config=config,
             custom_instructions=self._custom_instructions,
+            coordinator=self._coordinator,
         )
 
         try:
@@ -119,8 +127,11 @@ class PydanticAIBackend(LLMBackend):
                 ),
                 deps=deps,
             )
-            file_manager.save_json(deps.module_tree, module_tree_path)
-            return deps.module_tree
+            # Merge rather than overwrite: a sibling module running concurrently
+            # may have added branches since this agent loaded the tree.
+            return await self._coordinator.merge_subtree(
+                module_tree_path, module_path, deps.module_tree
+            )
         except Exception as e:
             logger.error("Error processing module %s: %s", module_name, e)
             logger.error("Traceback: %s", traceback.format_exc())

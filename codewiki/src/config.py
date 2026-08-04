@@ -18,6 +18,9 @@ MAX_DEPTH = 2
 DEFAULT_MAX_TOKENS = 32_768
 DEFAULT_MAX_TOKEN_PER_MODULE = 36_369
 DEFAULT_MAX_TOKEN_PER_LEAF_MODULE = 16_000
+# Sibling modules documented at once. Each one drives its own multi-turn agent
+# loop, so this multiplies API request rate — keep it modest by default.
+DEFAULT_MAX_CONCURRENT_MODULES = 4
 # Legacy constants (for backward compatibility)
 MAX_TOKEN_PER_MODULE = DEFAULT_MAX_TOKEN_PER_MODULE
 MAX_TOKEN_PER_LEAF_MODULE = DEFAULT_MAX_TOKEN_PER_LEAF_MODULE
@@ -70,6 +73,8 @@ class Config:
     max_tokens: int = DEFAULT_MAX_TOKENS
     max_token_per_module: int = DEFAULT_MAX_TOKEN_PER_MODULE
     max_token_per_leaf_module: int = DEFAULT_MAX_TOKEN_PER_LEAF_MODULE
+    # How many sibling modules to document concurrently (1 = serial)
+    max_concurrent_modules: int = DEFAULT_MAX_CONCURRENT_MODULES
     # Agent instructions for customization
     agent_instructions: Optional[Dict[str, Any]] = None
     # Apply Git ignore rules before dependency analysis
@@ -174,6 +179,7 @@ class Config:
         max_tokens: int = DEFAULT_MAX_TOKENS,
         max_token_per_module: int = DEFAULT_MAX_TOKEN_PER_MODULE,
         max_token_per_leaf_module: int = DEFAULT_MAX_TOKEN_PER_LEAF_MODULE,
+        max_concurrent_modules: int = DEFAULT_MAX_CONCURRENT_MODULES,
         max_depth: int = MAX_DEPTH,
         agent_instructions: Optional[Dict[str, Any]] = None,
         use_gitignore: bool = True,
@@ -196,6 +202,7 @@ class Config:
             max_tokens: Maximum tokens for LLM response
             max_token_per_module: Maximum tokens per module for clustering
             max_token_per_leaf_module: Maximum tokens per leaf module
+            max_concurrent_modules: Sibling modules documented concurrently (1 = serial)
             max_depth: Maximum depth for hierarchical decomposition
             agent_instructions: Custom agent instructions dict
             use_gitignore: Whether to apply Git ignore rules
@@ -224,6 +231,7 @@ class Config:
             max_tokens=max_tokens,
             max_token_per_module=max_token_per_module,
             max_token_per_leaf_module=max_token_per_leaf_module,
+            max_concurrent_modules=max_concurrent_modules,
             agent_instructions=agent_instructions,
             use_gitignore=use_gitignore,
         )

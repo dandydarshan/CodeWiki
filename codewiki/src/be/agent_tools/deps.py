@@ -15,3 +15,6 @@ class CodeWikiDeps:
     current_depth: int
     config: Config  # LLM configuration
     custom_instructions: str = None
+    # Shared ModuleTreeCoordinator when module agents run concurrently; None
+    # means serial execution, where unsynchronized access is already safe.
+    coordinator: object = None

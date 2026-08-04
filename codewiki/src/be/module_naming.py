@@ -73,16 +73,23 @@ def normalize_sub_module_specs(
     parent_name: Optional[str],
     module_tree: Dict[str, Any],
     working_dir: str,
+    reserved: Optional[Set[str]] = None,
 ) -> Dict[str, str]:
     """Map requested sub-module names to unique, file-safe final names.
 
     A name is taken if it already appears anywhere in the module tree, if a
     ``.md`` with that stem exists in the flat docs dir, if it is reserved, or
     if it was assigned earlier in this batch.
+
+    ``reserved`` carries names handed out to sub-agents that are still running
+    and have not written their ``.md`` yet — without it, concurrent agents both
+    see a name as free and one doc overwrites the other.
     """
     taken = collect_module_tree_names(module_tree)
     taken |= _existing_doc_stems(working_dir)
     taken |= RESERVED_STEMS
+    if reserved:
+        taken |= reserved
 
     name_map: Dict[str, str] = {}
     for requested_name in sub_module_specs:

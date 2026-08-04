@@ -35,6 +35,10 @@ def is_caw_provider(provider: str) -> bool:
 class LLMBackend(abc.ABC):
     """Abstract LLM backend used by the documentation generator."""
 
+    #: Whether ``run_module_agent`` may be invoked concurrently for sibling
+    #: modules.  Defaults to False so a backend opts in deliberately.
+    supports_parallel_modules: bool = False
+
     @abc.abstractmethod
     def complete(
         self,

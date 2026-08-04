@@ -39,12 +39,22 @@ async def generate_sub_module_documentation(
 
     # Resolve name collisions against the module tree and files already on disk
     # before touching the tree (issue #76): docs live in one flat directory.
-    name_map = normalize_sub_module_specs(
-        sub_module_specs,
-        previous_module_name,
-        deps.module_tree,
-        deps.absolute_docs_path,
-    )
+    # Under concurrency this has to be atomic, or two sub-agents both see the
+    # same name as free and one doc overwrites the other.
+    if deps.coordinator is not None:
+        name_map = await deps.coordinator.reserve_sub_module_names(
+            sub_module_specs,
+            previous_module_name,
+            deps.module_tree,
+            deps.absolute_docs_path,
+        )
+    else:
+        name_map = normalize_sub_module_specs(
+            sub_module_specs,
+            previous_module_name,
+            deps.module_tree,
+            deps.absolute_docs_path,
+        )
     final_specs = {
         name_map[requested_name]: core_component_ids
         for requested_name, core_component_ids in sub_module_specs.items()

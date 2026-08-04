@@ -136,6 +136,7 @@ class Configuration:
     max_tokens: int = 32768
     max_token_per_module: int = 36369
     max_token_per_leaf_module: int = 16000
+    max_concurrent_modules: int = 4
     max_depth: int = 2
     use_gitignore: bool = True
     agent_instructions: AgentInstructions = field(default_factory=AgentInstructions)
@@ -173,6 +174,7 @@ class Configuration:
             'max_tokens': self.max_tokens,
             'max_token_per_module': self.max_token_per_module,
             'max_token_per_leaf_module': self.max_token_per_leaf_module,
+            'max_concurrent_modules': self.max_concurrent_modules,
             'max_depth': self.max_depth,
             'use_gitignore': self.use_gitignore,
             'fallback_model': self.fallback_model,
@@ -209,6 +211,7 @@ class Configuration:
             max_tokens=data.get('max_tokens', 32768),
             max_token_per_module=data.get('max_token_per_module', 36369),
             max_token_per_leaf_module=data.get('max_token_per_leaf_module', 16000),
+            max_concurrent_modules=data.get('max_concurrent_modules', 4),
             max_depth=data.get('max_depth', 2),
             use_gitignore=data.get('use_gitignore', True),
             agent_instructions=agent_instructions,
@@ -276,6 +279,7 @@ class Configuration:
             max_tokens=self.max_tokens,
             max_token_per_module=self.max_token_per_module,
             max_token_per_leaf_module=self.max_token_per_leaf_module,
+            max_concurrent_modules=self.max_concurrent_modules,
             max_depth=self.max_depth,
             agent_instructions=final_instructions.to_dict() if final_instructions else None,
             use_gitignore=self.use_gitignore,

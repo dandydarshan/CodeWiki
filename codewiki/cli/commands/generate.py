@@ -296,6 +296,12 @@ def _invalidate_affected_modules(
     help="Maximum tokens per leaf module (overrides config)",
 )
 @click.option(
+    "--max-concurrent-modules",
+    type=int,
+    default=None,
+    help="Sibling modules to document in parallel (1 = serial, overrides config)",
+)
+@click.option(
     "--max-depth",
     type=int,
     default=None,
@@ -329,6 +335,7 @@ def generate_command(
     max_tokens: Optional[int],
     max_token_per_module: Optional[int],
     max_token_per_leaf_module: Optional[int],
+    max_concurrent_modules: Optional[int],
     max_depth: Optional[int],
     update: bool = False,
     compare_to: Optional[str] = None
@@ -535,6 +542,7 @@ def generate_command(
             logger.debug(f"Max tokens: {effective_max_tokens}")
             logger.debug(f"Max token/module: {effective_max_token_per_module}")
             logger.debug(f"Max token/leaf module: {effective_max_token_per_leaf}")
+            logger.debug(f"Max concurrent modules: {max_concurrent_modules if max_concurrent_modules is not None else config.max_concurrent_modules}")
             logger.debug(f"Max depth: {effective_max_depth}")
             logger.debug(f"Use gitignore: {effective_use_gitignore}")
         
@@ -572,6 +580,7 @@ def generate_command(
                 'max_tokens': max_tokens if max_tokens is not None else config.max_tokens,
                 'max_token_per_module': max_token_per_module if max_token_per_module is not None else config.max_token_per_module,
                 'max_token_per_leaf_module': max_token_per_leaf_module if max_token_per_leaf_module is not None else config.max_token_per_leaf_module,
+                'max_concurrent_modules': max_concurrent_modules if max_concurrent_modules is not None else config.max_concurrent_modules,
                 # Max depth setting (runtime override takes precedence)
                 'max_depth': max_depth if max_depth is not None else config.max_depth,
                 # Gitignore setting (runtime override takes precedence)

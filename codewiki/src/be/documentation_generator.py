@@ -1,7 +1,9 @@
+import asyncio
 import logging
 import os
 import json
 import re
+from collections import defaultdict
 from typing import Dict, List, Any
 from copy import deepcopy
 import traceback
@@ -38,6 +40,7 @@ from codewiki.src.be.module_naming import (
     find_missing_module_docs,
     resolve_module_doc_path,
 )
+from codewiki.src.be.doc_state import node_at_path
 from codewiki.src.be.utils import count_tokens, truncate_to_tokens
 from codewiki.src.utils import file_manager
 
@@ -117,6 +120,67 @@ class DocumentationGenerator:
         
         collect_modules(module_tree, parent_path)
         return processing_order
+
+    def get_processing_levels(
+        self, module_tree: Dict[str, Any]
+    ) -> List[List[tuple[List[str], str]]]:
+        """Group the processing order into levels that can run concurrently.
+
+        A module's only dependency is its own children — a parent overview reads
+        its children's ``.md`` files. So every module at a given depth is
+        independent of every other module at that depth, and documenting the
+        deepest level first, then the next one up, respects every edge while
+        letting each level run in parallel.
+        """
+        by_depth: Dict[int, List[tuple[List[str], str]]] = defaultdict(list)
+        for module_path, module_name in self.get_processing_order(module_tree):
+            by_depth[len(module_path)].append((module_path, module_name))
+        return [by_depth[depth] for depth in sorted(by_depth, reverse=True)]
+
+    def _module_concurrency(self) -> int:
+        """Effective number of modules to document at once."""
+        configured = max(1, int(getattr(self.config, "max_concurrent_modules", 1)))
+        if configured == 1:
+            return 1
+        if not getattr(self.backend, "supports_parallel_modules", False):
+            # The caw backend chdir()s the process per agent run and drives a
+            # CLI subprocess, so concurrent runs would fight over the cwd.
+            logger.info(
+                "Backend %s does not support parallel module generation; "
+                "documenting modules serially.",
+                type(self.backend).__name__,
+            )
+            return 1
+        return configured
+
+    async def _process_one_module(
+        self,
+        module_path: List[str],
+        module_name: str,
+        module_info: Dict[str, Any],
+        components: Dict[str, Any],
+        working_dir: str,
+        semaphore: "asyncio.Semaphore",
+    ) -> None:
+        """Document a single module. Failures are logged, not propagated."""
+        module_key = "/".join(module_path)
+        async with semaphore:
+            try:
+                if self.is_leaf_module(module_info):
+                    logger.info(f"📄 Processing leaf module: {module_key}")
+                    await self.backend.run_module_agent(
+                        module_name=module_name,
+                        components=components,
+                        core_component_ids=module_info["components"],
+                        module_path=module_path,
+                        working_dir=working_dir,
+                    )
+                else:
+                    logger.info(f"📁 Processing parent module: {module_key}")
+                    await self.generate_parent_module_docs(module_path, working_dir)
+            except Exception as e:
+                logger.error(f"Failed to process module {module_key}: {str(e)}")
+                logger.error(f"Traceback: {traceback.format_exc()}")
 
     def is_leaf_module(self, module_info: Dict[str, Any]) -> bool:
         """Check if a module is a leaf module (has no children or empty children)."""
@@ -281,54 +345,64 @@ class DocumentationGenerator:
         module_tree = file_manager.load_json(module_tree_path)
         first_module_tree = file_manager.load_json(first_module_tree_path)
         
-        # Get processing order (leaf modules first)
-        processing_order = self.get_processing_order(first_module_tree)
+        # Group into levels that can run concurrently (deepest level first)
+        processing_levels = self.get_processing_levels(first_module_tree)
 
-        
         # Process modules in dependency order
         final_module_tree = module_tree
-        processed_modules = set()
 
         if len(module_tree) > 0:
-            for module_path, module_name in processing_order:
-                try:
-                    # Reload module tree to get latest hierarchical structure from sub-agent modifications
-                    module_tree = file_manager.load_json(module_tree_path)
-                    
-                    # Get the module info from the tree
-                    module_info = module_tree
-                    for path_part in module_path:
-                        module_info = module_info[path_part]
-                        if path_part != module_path[-1]:  # Not the last part
-                            module_info = module_info.get("children", {})
-                    
-                    # Skip if already processed
+            concurrency = self._module_concurrency()
+            semaphore = asyncio.Semaphore(concurrency)
+            total = sum(len(level) for level in processing_levels)
+            logger.info(
+                "Documenting %d module(s) across %d dependency level(s), "
+                "%d at a time.",
+                total,
+                len(processing_levels),
+                concurrency,
+            )
+
+            processed_modules = set()
+            for depth_index, level in enumerate(processing_levels):
+                # The structural plan comes from first_module_tree, which is
+                # fixed; module_tree.json changes under us as sub-agents add
+                # branches, so it can't be the source of truth for scheduling.
+                tasks = []
+                for module_path, module_name in level:
                     module_key = "/".join(module_path)
                     if module_key in processed_modules:
                         continue
-                    
-                    # Process the module
-                    if self.is_leaf_module(module_info):
-                        logger.info(f"📄 Processing leaf module: {module_key}")
-                        final_module_tree = await self.backend.run_module_agent(
-                            module_name=module_name,
-                            components=components,
-                            core_component_ids=module_info["components"],
-                            module_path=module_path,
-                            working_dir=working_dir,
+                    module_info = node_at_path(first_module_tree, module_path)
+                    if module_info is None:
+                        logger.error(
+                            "Module %s is missing from the planned tree; skipping.",
+                            module_key,
                         )
-                    else:
-                        logger.info(f"📁 Processing parent module: {module_key}")
-                        final_module_tree = await self.generate_parent_module_docs(
-                            module_path, working_dir
-                        )
-                    
+                        continue
                     processed_modules.add(module_key)
-                    
-                except Exception as e:
-                    logger.error(f"Failed to process module {module_key}: {str(e)}")
-                    logger.error(f"Traceback: {traceback.format_exc()}")
+                    tasks.append(
+                        self._process_one_module(
+                            module_path,
+                            module_name,
+                            module_info,
+                            components,
+                            working_dir,
+                            semaphore,
+                        )
+                    )
+
+                if not tasks:
                     continue
+                logger.info(
+                    "▶ Level %d/%d: %d module(s)",
+                    depth_index + 1,
+                    len(processing_levels),
+                    len(tasks),
+                )
+                # Barrier between levels: a parent's overview reads its
+                # children's .md files, so the level below must be complete.
+                await asyncio.gather(*tasks)
 
             # Generate repo overview
             logger.info(f"📚 Generating repository overview")

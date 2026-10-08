@@ -13,6 +13,8 @@ import sys
 from pathlib import Path
 from typing import Any
 
+import click
+
 from codewiki.cli.models.job import DocumentationJob, LLMConfig
 from codewiki.cli.utils.errors import APIError, IncompleteGenerationError
 from codewiki.cli.utils.progress import ProgressTracker
@@ -541,15 +543,36 @@ class CLIDocumentationGenerator:
 
         # Generate HTML with auto-loading of module_tree and metadata from docs_dir
         output_path = self.output_dir / "index.html"
-        html_generator.generate(
+        if self.verbose:
+            self.progress_tracker.update_stage(0.5, "Building search_index.json for Ctrl+K search...")
+        viewer_summary = html_generator.generate(
             output_path=output_path,
             title=repo_info["name"],
             repository_url=repo_info["url"],
             github_pages_url=repo_info["github_pages_url"],
             docs_dir=self.output_dir,  # Auto-load module_tree and metadata from here
         )
+        if self.verbose:
+            self.progress_tracker.update_stage(
+                0.8,
+                "Wrapping viewer_template.html into index.html (search at top of content)...",
+            )
 
         self.job.files_generated.append("index.html")
+        if viewer_summary.get("search_index_written"):
+            self.job.files_generated.append(viewer_summary["search_index_filename"])
+
+        click.echo(
+            "  GitHub Pages viewer: wrapped viewer_template.html → index.html "
+            "(search at top of content area)"
+        )
+        if viewer_summary.get("search_index_written"):
+            click.echo(
+                f"  Documentation search: wrote {viewer_summary['search_index_filename']} "
+                f"({viewer_summary['search_index_sections']} sections, lazy-loaded on Ctrl+K)"
+            )
+        else:
+            click.echo("  Documentation search: search index was not written (see warnings above)")
 
         if self.verbose:
             self.progress_tracker.update_stage(1.0, "Generated index.html")

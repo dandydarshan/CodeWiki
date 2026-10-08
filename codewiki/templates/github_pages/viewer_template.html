@@ -47,6 +47,7 @@
             --error-color: #991b1b;
             --backdrop-color: rgba(15, 23, 42, 0.5);
             --lightbox-bg: rgba(255, 255, 255, 0.97);
+            --search-flash-bg: rgba(217, 95, 0, 0.12);
         }
 
         html[data-theme="dark"] {
@@ -71,6 +72,7 @@
             --error-color: #fca5a5;
             --backdrop-color: rgba(0, 0, 0, 0.6);
             --lightbox-bg: rgba(15, 23, 42, 0.97);
+            --search-flash-bg: rgba(255, 154, 46, 0.16);
         }
 
         * {
@@ -124,9 +126,33 @@
             display: none;
         }
 
+        .content-toolbar {
+            width: 100%;
+            min-width: 0;
+            margin-bottom: 12px;
+        }
+
+        .content-toolbar .search-trigger {
+            width: 100%;
+            max-width: none;
+            margin-bottom: 0;
+        }
+
+        .content-primary {
+            grid-column: 1;
+            min-width: 0;
+            width: 100%;
+        }
+
         .doc-column {
             min-width: 0;
-            max-width: 920px;
+            width: 100%;
+            max-width: 100%;
+        }
+
+        .content-inner .toc {
+            grid-column: 2;
+            align-self: start;
         }
 
         .sidebar-top {
@@ -250,6 +276,274 @@
             color: var(--muted-color);
         }
 
+        .search-trigger {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            width: 100%;
+            padding: 8px 10px;
+            margin-bottom: 16px;
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            font-size: 13px;
+            font-family: inherit;
+            background: var(--panel-bg);
+            color: var(--muted-color);
+            cursor: pointer;
+            transition: border-color 0.2s;
+        }
+
+        .search-trigger:hover,
+        .search-trigger:focus {
+            border-color: var(--primary-color);
+            outline: none;
+        }
+
+        .search-trigger-icon {
+            flex-shrink: 0;
+            font-size: 13px;
+        }
+
+        .search-trigger-label {
+            flex: 1;
+            text-align: left;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .search-trigger-kbd {
+            flex-shrink: 0;
+            padding: 2px 6px;
+            font-size: 11px;
+            border: 1px solid var(--border-color);
+            border-radius: 4px;
+            background: var(--secondary-color);
+            color: var(--muted-color);
+        }
+
+        .search-modal-backdrop {
+            display: none;
+            position: fixed;
+            inset: 0;
+            z-index: 500;
+            background: var(--backdrop-color);
+            padding: 10vh 16px 16px;
+        }
+
+        .search-modal-backdrop.open {
+            display: block;
+        }
+
+        .search-modal {
+            width: min(640px, 100%);
+            max-height: calc(100vh - 14vh - 16px);
+            margin: 0 auto;
+            display: flex;
+            flex-direction: column;
+            background: var(--panel-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+            box-shadow: 0 24px 60px rgba(0, 0, 0, 0.25);
+            overflow: hidden;
+        }
+
+        .search-modal-input-row {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 14px 16px;
+            border-bottom: 1px solid var(--border-color);
+            flex-shrink: 0;
+        }
+
+        .search-modal-icon {
+            flex-shrink: 0;
+            color: var(--muted-color);
+        }
+
+        .search-modal-input {
+            flex: 1;
+            border: none;
+            outline: none;
+            background: transparent;
+            font-size: 15px;
+            font-family: inherit;
+            color: var(--text-color);
+        }
+
+        .search-modal-input::placeholder {
+            color: var(--muted-color);
+        }
+
+        .search-modal-close {
+            flex-shrink: 0;
+            padding: 3px 8px;
+            font-size: 11px;
+            font-family: inherit;
+            color: var(--muted-color);
+            background: var(--secondary-color);
+            border: 1px solid var(--border-color);
+            border-radius: 4px;
+            cursor: pointer;
+        }
+
+        .search-modal-close:hover {
+            border-color: var(--primary-color);
+            color: var(--primary-color);
+        }
+
+        .search-modal-results {
+            overflow-y: auto;
+            padding: 8px;
+        }
+
+        .search-result-group {
+            padding: 4px 0 8px;
+        }
+
+        .search-result-group + .search-result-group {
+            margin-top: 2px;
+            border-top: 1px solid var(--border-color);
+        }
+
+        .search-result-page-header {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            width: calc(100% - 8px);
+            margin: 0 4px 6px;
+            padding: 8px 10px;
+            border: none;
+            border-radius: 6px;
+            background: var(--hover-color);
+            font-family: inherit;
+            text-align: left;
+            cursor: pointer;
+        }
+
+        .search-result-page-header:hover .search-result-page-filename {
+            color: var(--primary-color);
+        }
+
+        .search-result-page-text {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: baseline;
+            gap: 4px;
+            min-width: 0;
+        }
+
+        .search-result-page-crumbs {
+            font-size: 12px;
+            color: var(--muted-color);
+        }
+
+        .search-result-file-icon {
+            flex-shrink: 0;
+            width: 16px;
+            height: 16px;
+            color: var(--muted-color);
+        }
+
+        .search-result-page-filename {
+            font-size: 14px;
+            font-weight: 600;
+            color: var(--heading-color);
+            line-height: 1.4;
+            word-break: break-word;
+        }
+
+        .search-result-sections {
+            display: block;
+        }
+
+        .search-result-section-row {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+            width: 100%;
+            padding: 8px 12px 8px 38px;
+            border: none;
+            border-radius: 6px;
+            background: transparent;
+            text-align: left;
+            font-family: inherit;
+            cursor: pointer;
+        }
+
+        .search-result-section-row:hover,
+        .search-result-section-row.active {
+            background: var(--hover-color);
+        }
+
+        .search-result-section-heading {
+            display: flex;
+            align-items: baseline;
+            gap: 6px;
+            line-height: 1.4;
+        }
+
+        .search-result-hash {
+            flex-shrink: 0;
+            font-size: 13px;
+            font-weight: 500;
+            color: var(--muted-color);
+        }
+
+        .search-result-section-title {
+            font-size: 13px;
+            font-weight: 600;
+            color: var(--text-color);
+        }
+
+        .search-result-snippet {
+            padding-left: 14px;
+            font-size: 12px;
+            font-weight: 400;
+            color: var(--muted-color);
+            line-height: 1.45;
+            overflow: hidden;
+            display: -webkit-box;
+            -webkit-line-clamp: 2;
+            -webkit-box-orient: vertical;
+        }
+
+        .search-result-snippet mark {
+            font-weight: 600;
+        }
+
+        .search-result-group mark {
+            background: transparent;
+            color: var(--primary-color);
+            font-weight: 600;
+        }
+
+        /* Section a search result opened: one tinted block from its heading
+           to the next heading, fading out after a moment */
+        .search-flash {
+            position: absolute;
+            left: -12px;
+            right: -12px;
+            border-left: 3px solid var(--primary-color);
+            border-radius: 4px;
+            background: var(--search-flash-bg);
+            pointer-events: none;
+            animation: search-flash 2.4s ease-out forwards;
+        }
+
+        @keyframes search-flash {
+            0%, 45% { opacity: 1; }
+            100% { opacity: 0; }
+        }
+
+        .search-modal-empty {
+            padding: 32px 16px;
+            text-align: center;
+            font-size: 13px;
+            color: var(--muted-color);
+        }
+
         .nav-section {
             margin-bottom: 12px;
         }
@@ -357,6 +651,7 @@
         }
 
         .markdown-content {
+            position: relative;
             max-width: 100%;
             animation: fadeIn 0.3s ease-in;
         }
@@ -805,7 +1100,8 @@
             flex-direction: column;
             align-items: center;
             justify-content: center;
-            min-height: 400px;
+            min-height: 10rem;
+            padding: 1.5rem 0;
             color: var(--muted-color);
         }
 
@@ -913,6 +1209,17 @@
     <button class="menu-toggle" id="menu-toggle" type="button" aria-label="Toggle navigation">☰</button>
     <div class="backdrop" id="backdrop"></div>
 
+    <div class="search-modal-backdrop" id="search-modal-backdrop">
+        <div class="search-modal" id="search-modal" role="dialog" aria-modal="true" aria-label="Search documentation">
+            <div class="search-modal-input-row">
+                <span class="search-modal-icon">🔎</span>
+                <input type="text" class="search-modal-input" id="search-modal-input" placeholder="Search documentation…" autocomplete="off" spellcheck="false">
+                <button class="search-modal-close" id="search-modal-close" type="button" aria-label="Close search">Esc</button>
+            </div>
+            <div class="search-modal-results" id="search-modal-results"></div>
+        </div>
+    </div>
+
     <div class="container">
         <nav class="sidebar" id="sidebar">
             <div class="sidebar-top">
@@ -942,18 +1249,29 @@
 
         <main class="content">
             <div class="content-inner no-toc">
-                <div class="doc-column">
-                    <div id="loading" class="loading">
-                        <div class="loading-spinner"></div>
-                        <p>Loading documentation...</p>
+                <div class="content-primary">
+                    <div class="content-toolbar">
+                        <button class="search-trigger" id="search-trigger" type="button" aria-label="Search documentation">
+                            <span class="search-trigger-icon">🔎</span>
+                            <span class="search-trigger-label">Search docs…</span>
+                            <span class="search-trigger-kbd">Ctrl K</span>
+                        </button>
                     </div>
+                    <div class="doc-column">
+                        <div id="loading" class="loading">
+                            <div class="loading-spinner"></div>
+                            <p>Loading documentation...</p>
+                        </div>
 
-                    <div id="content" class="markdown-content" style="display: none;"></div>
+                        <div id="content" class="markdown-content" style="display: none;"></div>
 
-                    <nav id="pager" class="pager" aria-label="Previous and next page"></nav>
+                        <nav id="pager" class="pager" aria-label="Previous and next page"></nav>
+                    </div>
                 </div>
 
-                <aside class="toc" id="toc" aria-label="Table of contents"></aside>
+                <aside class="toc" id="toc" aria-label="Table of contents">
+                    <div id="toc-content"></div>
+                </aside>
             </div>
         </main>
     </div>
@@ -1003,6 +1321,16 @@
         let currentFile = null;
         let loadToken = 0;
         let scrollSpyObserver = null;
+
+        // ---------- Search state ----------
+        // SEARCH_INDEX: raw section records fetched from search_index.json
+        // (null = not fetched yet, [] = fetched but empty/unavailable).
+        // SEARCH_VOCAB: precomputed BM25 statistics built once after fetch.
+        let SEARCH_INDEX = null;
+        let SEARCH_VOCAB = null;
+        let searchResults = [];
+        let searchActiveIndex = -1;
+        let searchDebounceTimer = null;
 
         // Initialize marked. headerIds/mangle were removed in marked v5+;
         // GitHub-compatible heading ids come from the marked-gfm-heading-id
@@ -1055,6 +1383,7 @@
             setupThemeToggle();
             setupMobileDrawer();
             setupLinkInterception();
+            setupSearchModal();
             initMermaid();
 
             window.addEventListener('hashchange', onHashChange);
@@ -1081,7 +1410,7 @@
                 const raw = hash.slice(2);
                 const sep = raw.indexOf(':');
                 const filePart = sep === -1 ? raw : raw.slice(0, sep);
-                const anchor = sep === -1 ? null : raw.slice(sep + 1);
+                const anchor = sep === -1 ? null : safeDecode(raw.slice(sep + 1));
                 try {
                     const file = decodeURIComponent(filePart);
                     if (file) {
@@ -1122,7 +1451,11 @@
             const el = document.getElementById(anchor);
             if (el) {
                 el.scrollIntoView({ block: 'start' });
+                if (pendingSectionFlash === anchor) {
+                    flashSection(el);
+                }
             }
+            pendingSectionFlash = null;
         }
 
         // ---------- Sidebar navigation ----------
@@ -1244,6 +1577,612 @@
                     }
                 });
             });
+        }
+
+        // ---------- Search (Ctrl+K, BM25 over section index) ----------
+        //
+        // search_index.json holds one record per heading across every page:
+        // {id, file, anchor, level, title, content}, where `file` is the page's
+        // docs-relative path (nested in the hierarchical layout). It is fetched
+        // lazily the first time the modal opens and ranked client-side, the way
+        // the Next.js docs search behaves:
+        //
+        // - identifiers are split into words (ChangeDetectionStrategy ->
+        //   change, detection, strategy) and query words also match as prefixes,
+        //   so "card" finds CardComponent and "changeDet" works while typing;
+        // - every query word must match the section or the page it sits on
+        //   (page title and its parent modules), so "changeDetection strategy
+        //   of card" lands on the "Change detection strategy" section of Card;
+        // - results are grouped by page with the best section first, and opening
+        //   one scrolls its heading to the top and briefly highlights the section.
+
+        const BM25_K1 = 1.2;
+        // BM25F: weight of a term occurrence per field (section heading, page
+        // title and parents, body) and how much each field's length dampens
+        // it, so a long section is not penalised for a match in its heading.
+        const SEARCH_FIELD_WEIGHTS = { title: 4, page: 2, content: 1 };
+        const SEARCH_FIELD_B = { title: 0.3, page: 0.3, content: 0.75 };
+        // A query word that is only a prefix of an indexed word counts less
+        const SEARCH_PREFIX_WEIGHT = 0.5;
+        const SEARCH_MAX_PREFIX_EXPANSIONS = 40;
+        const SEARCH_FILE_GROUP_LIMIT = 8;
+        const SEARCH_SECTIONS_PER_FILE = 4;
+        const SEARCH_SNIPPET_RADIUS = 80;
+        const SEARCH_FLASH_MS = 2400;
+        const SEARCH_STOPWORDS = new Set([
+            'a', 'an', 'and', 'are', 'as', 'at', 'be', 'by', 'for', 'from', 'how', 'in', 'into',
+            'is', 'it', 'of', 'on', 'or', 'the', 'to', 'what', 'when', 'where', 'which', 'with'
+        ]);
+        const SEARCH_WORD_RE = /[\p{L}\p{N}]+(?:[_.'\-][\p{L}\p{N}]+)*/gu;
+
+        // Section to highlight once the page it is on has scrolled to it
+        let pendingSectionFlash = null;
+        let sectionFlashTimer = null;
+
+        // Next.js docs search: document with dog-ear fold + three text lines (Lucide file-text)
+        const SEARCH_FILE_ICON_SVG =
+            '<svg class="search-result-file-icon" viewBox="0 0 24 24" width="16" height="16" ' +
+            'fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+            '<path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7z"/>' +
+            '<path d="M14 2v4a2 2 0 0 0 2 2h4"/>' +
+            '<path d="M10 9H8"/>' +
+            '<path d="M16 13H8"/>' +
+            '<path d="M16 17H8"/>' +
+            '</svg>';
+
+        function setupSearchModal() {
+            const trigger = document.getElementById('search-trigger');
+            const backdrop = document.getElementById('search-modal-backdrop');
+            const input = document.getElementById('search-modal-input');
+            const closeBtn = document.getElementById('search-modal-close');
+            const results = document.getElementById('search-modal-results');
+
+            trigger.addEventListener('click', openSearchModal);
+            closeBtn.addEventListener('click', closeSearchModal);
+
+            backdrop.addEventListener('click', function(e) {
+                if (e.target === backdrop) closeSearchModal();
+            });
+
+            input.addEventListener('input', function() {
+                clearTimeout(searchDebounceTimer);
+                const query = this.value;
+                searchDebounceTimer = setTimeout(function() {
+                    runSearch(query);
+                }, 60);
+            });
+
+            input.addEventListener('keydown', function(e) {
+                if (e.key === 'ArrowDown') {
+                    e.preventDefault();
+                    moveSearchSelection(1);
+                } else if (e.key === 'ArrowUp') {
+                    e.preventDefault();
+                    moveSearchSelection(-1);
+                } else if (e.key === 'Enter') {
+                    e.preventDefault();
+                    // Results may still be pending behind the debounce
+                    clearTimeout(searchDebounceTimer);
+                    runSearch(this.value);
+                    activateSearchResult(searchActiveIndex >= 0 ? searchActiveIndex : 0);
+                } else if (e.key === 'Escape') {
+                    closeSearchModal();
+                }
+            });
+
+            results.addEventListener('click', function(e) {
+                const page = e.target.closest('.search-result-page-header');
+                if (page) {
+                    closeSearchModal();
+                    navigateTo(page.getAttribute('data-file'));
+                    return;
+                }
+                const item = e.target.closest('.search-result-section-row');
+                if (!item) return;
+                activateSearchResult(parseInt(item.getAttribute('data-index'), 10));
+            });
+
+            results.addEventListener('mousemove', function(e) {
+                const item = e.target.closest('.search-result-section-row');
+                if (item) setSearchSelection(parseInt(item.getAttribute('data-index'), 10), false);
+            });
+
+            document.addEventListener('keydown', function(e) {
+                const isMod = e.ctrlKey || e.metaKey;
+                if (isMod && (e.key === 'k' || e.key === 'K')) {
+                    e.preventDefault();
+                    openSearchModal();
+                }
+            });
+        }
+
+        function openSearchModal() {
+            const backdrop = document.getElementById('search-modal-backdrop');
+            const input = document.getElementById('search-modal-input');
+            backdrop.classList.add('open');
+            input.value = '';
+            input.focus();
+            renderSearchResults([], '');
+
+            if (SEARCH_INDEX === null) {
+                loadSearchIndex();
+            }
+        }
+
+        function closeSearchModal() {
+            document.getElementById('search-modal-backdrop').classList.remove('open');
+        }
+
+        function isSearchModalOpen() {
+            return document.getElementById('search-modal-backdrop').classList.contains('open');
+        }
+
+        async function loadSearchIndex() {
+            const path = DOCS_BASE_PATH ? DOCS_BASE_PATH + '/search_index.json' : 'search_index.json';
+            try {
+                const response = await fetch(path);
+                if (!response.ok) throw new Error('search_index.json not found');
+                SEARCH_INDEX = await response.json();
+            } catch (e) {
+                console.warn('Search index unavailable:', e);
+                SEARCH_INDEX = [];
+            }
+            buildSearchVocabulary();
+            const input = document.getElementById('search-modal-input');
+            if (isSearchModalOpen()) {
+                runSearch(input.value);
+            }
+        }
+
+        // ---- Tokenizing ----
+
+        // Leaf words of one identifier: "ChangeDetectionStrategy.OnPush" ->
+        // change, detection, strategy, on, push.
+        function identifierParts(word) {
+            const parts = [];
+            word.split(/[_.'\-]/).forEach(function(segment) {
+                segment
+                    .replace(/([\p{Ll}\p{N}])(\p{Lu})/gu, '$1 $2')
+                    .replace(/(\p{Lu}+)(\p{Lu}\p{Ll})/gu, '$1 $2')
+                    .split(' ')
+                    .forEach(function(part) {
+                        if (part) parts.push(part.toLowerCase());
+                    });
+            });
+            return parts;
+        }
+
+        // Indexed terms of `text`: each word whole, plus its segments and leaf
+        // words, so both "changedetectionstrategy" and "detection" match it.
+        function searchTerms(text) {
+            const out = [];
+            if (!text) return out;
+            (text.match(SEARCH_WORD_RE) || []).forEach(function(word) {
+                const terms = new Set([word.toLowerCase()]);
+                word.split(/[_.'\-]/).forEach(function(segment) {
+                    if (segment) terms.add(segment.toLowerCase());
+                });
+                identifierParts(word).forEach(function(part) { terms.add(part); });
+                terms.forEach(function(t) { out.push(t); });
+            });
+            return out;
+        }
+
+        function countTerms(text, into) {
+            const terms = searchTerms(text);
+            terms.forEach(function(t) { into.set(t, (into.get(t) || 0) + 1); });
+            return terms.length;
+        }
+
+        // ---- Index ----
+
+        // Page path -> {title, crumbs}: its sidebar title and its parents' titles.
+        function buildSearchPageInfo() {
+            const pages = { 'overview.md': { title: pageTitleFor('overview.md'), crumbs: [] } };
+            function walk(tree, crumbs) {
+                for (const [key, data] of Object.entries(tree || {})) {
+                    const title = formatNavTitle(key);
+                    pages[docFileFor(key)] = { title: title, crumbs: crumbs };
+                    if (data && data.children) {
+                        walk(data.children, crumbs.concat([title]));
+                    }
+                }
+            }
+            walk(MODULE_TREE, []);
+            return pages;
+        }
+
+        function buildSearchVocabulary() {
+            const pages = buildSearchPageInfo();
+            const docs = [];
+            const df = new Map();
+            const totalLengths = { title: 0, page: 0, content: 0 };
+
+            (SEARCH_INDEX || []).forEach(function(record, i) {
+                if (!pages[record.file]) {
+                    pages[record.file] = { title: pageTitleFor(record.file), crumbs: [] };
+                }
+                const page = pages[record.file];
+                const fields = { title: new Map(), page: new Map(), content: new Map() };
+                const lengths = {
+                    title: countTerms(record.title, fields.title),
+                    page: countTerms(page.title + ' ' + page.crumbs.join(' '), fields.page),
+                    content: countTerms(record.content, fields.content)
+                };
+                Object.keys(lengths).forEach(function(f) { totalLengths[f] += lengths[f]; });
+
+                const seen = new Set();
+                Object.values(fields).forEach(function(field) {
+                    field.forEach(function(_, t) { seen.add(t); });
+                });
+                seen.forEach(function(t) { df.set(t, (df.get(t) || 0) + 1); });
+
+                docs.push({
+                    record: record,
+                    page: page,
+                    fields: fields,
+                    lengths: lengths,
+                    index: i,
+                    titleWords: wordSequence(record.title),
+                    phraseText: wordSequence(record.title + ' ' + record.content)
+                });
+            });
+
+            const N = docs.length;
+            const avg = {};
+            Object.keys(totalLengths).forEach(function(f) {
+                avg[f] = N > 0 ? (totalLengths[f] / N) || 1 : 1;
+            });
+            SEARCH_VOCAB = {
+                docs: docs,
+                df: df,
+                N: N,
+                avg: avg,
+                terms: Array.from(df.keys()).sort(),
+                pages: pages
+            };
+        }
+
+        // Leaf words of `text` in order, space-separated and padded, for
+        // matching word sequences: "ChangeDetectionStrategy" and "change
+        // detection strategy" both become " change detection strategy ".
+        function wordSequence(text) {
+            const parts = [];
+            ((text || '').match(SEARCH_WORD_RE) || []).forEach(function(word) {
+                identifierParts(word).forEach(function(p) { parts.push(p); });
+            });
+            return ' ' + parts.join(' ') + ' ';
+        }
+
+        // ---- Ranking ----
+
+        // Indexed terms a query term matches: itself (weight 1) and, from two
+        // characters on, the words it is a prefix of.
+        function expandTerm(term) {
+            const out = [];
+            if (SEARCH_VOCAB.df.has(term)) out.push([term, 1]);
+            if (term.length < 2) return out;
+            const terms = SEARCH_VOCAB.terms;
+            let lo = 0;
+            let hi = terms.length;
+            while (lo < hi) {
+                const mid = (lo + hi) >> 1;
+                if (terms[mid] < term) lo = mid + 1; else hi = mid;
+            }
+            for (let i = lo; i < terms.length && out.length < SEARCH_MAX_PREFIX_EXPANSIONS; i++) {
+                if (terms[i].indexOf(term) !== 0) break;
+                if (terms[i] !== term) out.push([terms[i], SEARCH_PREFIX_WEIGHT]);
+            }
+            return out;
+        }
+
+        // Query -> one entry per meaningful word. A word matches through its
+        // whole form (any prefix of an indexed word) or, for identifiers typed
+        // as one word ("changeDetection"), through all of its leaf words.
+        function parseSearchQuery(query) {
+            let words = query.match(SEARCH_WORD_RE) || [];
+            const meaningful = words.filter(function(w) { return !SEARCH_STOPWORDS.has(w.toLowerCase()); });
+            if (meaningful.length > 0) words = meaningful;
+            const seen = new Set();
+            const parsed = [];
+            words.forEach(function(word) {
+                const whole = word.toLowerCase();
+                if (seen.has(whole)) return;
+                seen.add(whole);
+                const parts = identifierParts(word);
+                parsed.push({
+                    whole: expandTerm(whole),
+                    parts: parts.length > 1 ? parts.map(expandTerm) : [],
+                    // the parts must be adjacent: "on push", not "on" ... "push"
+                    sequence: ' ' + parts.join(' '),
+                    leaves: parts,
+                    highlight: [whole].concat(parts.length > 1 ? parts.filter(function(p) { return p.length > 2; }) : [])
+                });
+            });
+            return parsed;
+        }
+
+        function idf(term) {
+            const df = SEARCH_VOCAB.df.get(term) || 0;
+            const N = SEARCH_VOCAB.N;
+            return Math.log(1 + (N - df + 0.5) / (df + 0.5));
+        }
+
+        // BM25F score of one indexed term in one section.
+        function termScore(doc, term) {
+            let tf = 0;
+            for (const field in SEARCH_FIELD_WEIGHTS) {
+                const count = doc.fields[field].get(term);
+                if (!count) continue;
+                const b = SEARCH_FIELD_B[field];
+                const norm = 1 - b + b * (doc.lengths[field] / SEARCH_VOCAB.avg[field]);
+                tf += SEARCH_FIELD_WEIGHTS[field] * count / norm;
+            }
+            if (!tf) return 0;
+            return idf(term) * ((tf * (BM25_K1 + 1)) / (tf + BM25_K1));
+        }
+
+        // Best match of one expanded query term: {score, inTitle}.
+        function expandedScore(doc, expansions) {
+            let best = 0;
+            let inTitle = false;
+            for (let i = 0; i < expansions.length; i++) {
+                const term = expansions[i][0];
+                const score = expansions[i][1] * termScore(doc, term);
+                if (score > best) best = score;
+                if (score > 0 && doc.fields.title.has(term)) inTitle = true;
+            }
+            return { score: best, inTitle: inTitle };
+        }
+
+        function wordScore(doc, word) {
+            const whole = expandedScore(doc, word.whole);
+            if (word.parts.length === 0) return whole;
+            const inPage = (' ' + doc.page.title.toLowerCase()).indexOf(word.sequence) !== -1;
+            if (!inPage && doc.phraseText.indexOf(word.sequence) === -1) return whole;
+            let partsScore = 0;
+            let partsInTitle = true;
+            for (let i = 0; i < word.parts.length; i++) {
+                const part = expandedScore(doc, word.parts[i]);
+                if (!part.score) return whole;
+                partsScore += part.score;
+                partsInTitle = partsInTitle && part.inTitle;
+            }
+            return partsScore > whole.score
+                ? { score: partsScore, inTitle: partsInTitle }
+                : whole;
+        }
+
+        function scoreSection(doc, words, query) {
+            let score = 0;
+            let matched = 0;
+            let inTitle = 0;
+            words.forEach(function(word) {
+                const s = wordScore(doc, word);
+                if (s.score > 0) {
+                    score += s.score;
+                    matched += 1;
+                    if (s.inTitle) inTitle += 1;
+                }
+            });
+            if (!matched) return { score: 0, matched: 0 };
+            // Sections whose heading carries the query outrank ones that only
+            // mention it, a heading that *is* the query ("Card" for "card")
+            // ranks first, and words in the typed order outrank scattered ones.
+            score *= 1 + inTitle / words.length;
+            if (doc.titleWords === query.sequence + ' ') score *= 2;
+            let pairs = 0;
+            for (let i = 1; i < query.leaves.length; i++) {
+                if (doc.phraseText.indexOf(' ' + query.leaves[i - 1] + ' ' + query.leaves[i] + ' ') !== -1) {
+                    pairs += 1;
+                }
+            }
+            if (pairs) score *= 1 + 0.5 * pairs / (query.leaves.length - 1);
+            return { score: score, matched: matched };
+        }
+
+        function runSearch(query) {
+            const trimmed = (query || '').trim();
+            if (!trimmed || !SEARCH_VOCAB || SEARCH_VOCAB.N === 0) {
+                renderSearchResults([], trimmed);
+                return;
+            }
+            const words = parseSearchQuery(trimmed);
+            if (words.length === 0) {
+                renderSearchResults([], trimmed);
+                return;
+            }
+            const leaves = [];
+            words.forEach(function(w) { w.leaves.forEach(function(p) { leaves.push(p); }); });
+            const shape = { leaves: leaves, sequence: ' ' + leaves.join(' ') };
+
+            // Every word must match; if nothing matches all of them, fall back
+            // to the sections matching the most words.
+            const scored = [];
+            let bestMatched = 0;
+            SEARCH_VOCAB.docs.forEach(function(doc) {
+                const s = scoreSection(doc, words, shape);
+                if (!s.matched) return;
+                bestMatched = Math.max(bestMatched, s.matched);
+                scored.push({ doc: doc, score: s.score, matched: s.matched });
+            });
+            const kept = scored.filter(function(s) { return s.matched === bestMatched; });
+            kept.sort(function(a, b) { return b.score - a.score; });
+
+            const highlight = [];
+            words.forEach(function(w) { w.highlight.forEach(function(t) { highlight.push(t); }); });
+            renderSearchResults(groupSearchHitsByFile(kept), trimmed, highlight);
+        }
+
+        // Group hits by page, best page first and best section first within a
+        // page, so the top row is always the best match.
+        function groupSearchHitsByFile(scored) {
+            const byFile = new Map();
+            scored.forEach(function(s) {
+                const file = s.doc.record.file;
+                if (!byFile.has(file)) {
+                    byFile.set(file, { file: file, page: s.doc.page, maxScore: s.score, hits: [] });
+                }
+                byFile.get(file).hits.push(s);
+            });
+            const groups = Array.from(byFile.values());
+            groups.sort(function(a, b) { return b.maxScore - a.maxScore; });
+            groups.forEach(function(group) {
+                group.hits = group.hits.slice(0, SEARCH_SECTIONS_PER_FILE);
+            });
+            return groups.slice(0, SEARCH_FILE_GROUP_LIMIT);
+        }
+
+        // ---- Rendering ----
+
+        function highlightPattern(terms) {
+            const unique = Array.from(new Set(terms.filter(function(t) { return t.length > 1 || terms.length === 1; })));
+            if (unique.length === 0) return null;
+            unique.sort(function(a, b) { return b.length - a.length; });
+            const source = unique
+                .map(function(t) { return t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); })
+                .join('|');
+            return new RegExp('(' + source + ')', 'giu');
+        }
+
+        function highlightText(text, terms) {
+            const re = highlightPattern(terms || []);
+            if (!re) return escapeHtml(text);
+            let html = '';
+            let pos = 0;
+            text.replace(re, function(match, _group, offset) {
+                html += escapeHtml(text.slice(pos, offset)) + '<mark>' + escapeHtml(match) + '</mark>';
+                pos = offset + match.length;
+                return match;
+            });
+            return html + escapeHtml(text.slice(pos));
+        }
+
+        function buildSnippet(content, terms) {
+            if (!content) return '';
+            const re = highlightPattern(terms);
+            const hit = re ? re.exec(content) : null;
+            const hitAt = hit ? hit.index : 0;
+            const start = Math.max(0, hitAt - SEARCH_SNIPPET_RADIUS);
+            const end = start + SEARCH_SNIPPET_RADIUS * 2;
+            let snippet = content.slice(start, end);
+            snippet = (start > 0 ? '…' : '') + snippet + (end < content.length ? '…' : '');
+            return highlightText(snippet, terms);
+        }
+
+        function buildSearchPageHeader(group, terms) {
+            const crumbs = group.page.crumbs.length
+                ? '<span class="search-result-page-crumbs">' +
+                    escapeHtml(group.page.crumbs.join(' › ')) + ' ›</span>'
+                : '';
+            return (
+                '<button type="button" class="search-result-page-header" data-file="' +
+                escapeHtml(group.file) + '">' +
+                SEARCH_FILE_ICON_SVG +
+                '<span class="search-result-page-text">' + crumbs +
+                '<span class="search-result-page-filename">' +
+                highlightText(group.page.title, terms) +
+                '</span></span></button>'
+            );
+        }
+
+        function buildSearchSectionRow(record, terms, index) {
+            const heading = (record.title || record.anchor || '').trim();
+            const snippet = buildSnippet(record.content, terms);
+            return (
+                '<button type="button" class="search-result-section-row' +
+                (index === searchActiveIndex ? ' active' : '') + '" data-index="' + index + '">' +
+                '<span class="search-result-section-heading">' +
+                '<span class="search-result-hash" aria-hidden="true">#</span>' +
+                '<span class="search-result-section-title">' + highlightText(heading, terms) + '</span>' +
+                '</span>' +
+                (snippet ? '<span class="search-result-snippet">' + snippet + '</span>' : '') +
+                '</button>'
+            );
+        }
+
+        function renderSearchResults(grouped, query, terms) {
+            const results = document.getElementById('search-modal-results');
+            searchResults = [];
+            grouped.forEach(function(group) {
+                group.hits.forEach(function(s) { searchResults.push(s.doc.record); });
+            });
+            searchActiveIndex = searchResults.length > 0 ? 0 : -1;
+
+            if (SEARCH_INDEX === null) {
+                results.innerHTML = '<div class="search-modal-empty">Loading search index…</div>';
+                return;
+            }
+            if (SEARCH_INDEX.length === 0) {
+                results.innerHTML = '<div class="search-modal-empty">Search index unavailable for this build.</div>';
+                return;
+            }
+            if (!query) {
+                results.innerHTML = '<div class="search-modal-empty">Type to search across every page and section…</div>';
+                return;
+            }
+            if (grouped.length === 0) {
+                results.innerHTML = '<div class="search-modal-empty">No results for "' + escapeHtml(query) + '"</div>';
+                return;
+            }
+
+            let html = '';
+            let flatIndex = 0;
+            grouped.forEach(function(group) {
+                html += '<div class="search-result-group">' + buildSearchPageHeader(group, terms) +
+                    '<div class="search-result-sections">';
+                group.hits.forEach(function(s) {
+                    html += buildSearchSectionRow(s.doc.record, terms, flatIndex);
+                    flatIndex += 1;
+                });
+                html += '</div></div>';
+            });
+            results.innerHTML = html;
+            results.scrollTop = 0;
+        }
+
+        function setSearchSelection(index, reveal) {
+            if (index === searchActiveIndex) return;
+            searchActiveIndex = index;
+            document.querySelectorAll('.search-result-section-row').forEach(function(item, i) {
+                item.classList.toggle('active', i === searchActiveIndex);
+            });
+            const active = document.querySelector('.search-result-section-row.active');
+            if (active && reveal) active.scrollIntoView({ block: 'nearest' });
+        }
+
+        function moveSearchSelection(delta) {
+            if (searchResults.length === 0) return;
+            setSearchSelection((searchActiveIndex + delta + searchResults.length) % searchResults.length, true);
+        }
+
+        function activateSearchResult(index) {
+            const record = searchResults[index];
+            if (!record) return;
+            closeSearchModal();
+            pendingSectionFlash = record.anchor || null;
+            navigateTo(record.file, record.anchor);
+        }
+
+        // Briefly highlight the section under heading `el`: the heading and
+        // everything up to the next heading, i.e. the text the search matched.
+        function flashSection(el) {
+            const content = document.getElementById('content');
+            document.querySelectorAll('.search-flash').forEach(function(node) { node.remove(); });
+            clearTimeout(sectionFlashTimer);
+            let last = el;
+            while (last.nextElementSibling && !/^H[1-6]$/.test(last.nextElementSibling.tagName)) {
+                last = last.nextElementSibling;
+            }
+            const box = content.getBoundingClientRect();
+            const top = el.getBoundingClientRect().top - box.top - 6;
+            const bottom = last.getBoundingClientRect().bottom - box.top + 6;
+            const overlay = document.createElement('div');
+            overlay.className = 'search-flash';
+            overlay.style.top = top + 'px';
+            overlay.style.height = (bottom - top) + 'px';
+            content.appendChild(overlay);
+            sectionFlashTimer = setTimeout(function() { overlay.remove(); }, SEARCH_FLASH_MS);
         }
 
         // ---------- Document loading & rendering ----------
@@ -1625,7 +2564,7 @@
         // ---------- On-page table of contents ----------
 
         function buildTOC() {
-            const toc = document.getElementById('toc');
+            const tocContent = document.getElementById('toc-content');
             const contentInner = document.querySelector('.content-inner');
             const headings = Array.from(document.querySelectorAll('#content h2, #content h3'))
                 .filter(h => h.id);
@@ -1636,7 +2575,7 @@
             }
 
             if (headings.length < 3) {
-                toc.innerHTML = '';
+                tocContent.innerHTML = '';
                 contentInner.classList.add('no-toc');
                 return;
             }
@@ -1647,7 +2586,7 @@
                 html += '<a class="toc-link toc-' + h.tagName.toLowerCase() + '" href="#' +
                     escapeHtml(h.id) + '">' + escapeHtml(h.textContent) + '</a>';
             });
-            toc.innerHTML = html;
+            tocContent.innerHTML = html;
 
             setupScrollSpy(headings);
         }
@@ -1800,7 +2739,7 @@
             content.innerHTML = '<div class="error"><h3>⚠️ Error</h3><p>' +
                 escapeHtml(message) + '</p></div>';
             document.getElementById('pager').innerHTML = '';
-            document.getElementById('toc').innerHTML = '';
+            document.getElementById('toc-content').innerHTML = '';
             document.querySelector('.content-inner').classList.add('no-toc');
         }
     </script>

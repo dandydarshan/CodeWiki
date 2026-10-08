@@ -3,13 +3,21 @@ HTML generator for GitHub Pages documentation viewer.
 """
 
 import json
+import logging
 import shutil
 from pathlib import Path
 from typing import Optional, Dict, Any
 
 from codewiki.cli.utils.errors import FileSystemError
 from codewiki.cli.utils.fs import safe_write, safe_read
+from codewiki.src.be.search_index import build_search_index
+from codewiki.src.config import SEARCH_INDEX_FILENAME
 from codewiki.src.language import language_tag
+
+logger = logging.getLogger(__name__)
+
+DOCS_TEMPLATES_DIR = Path(__file__).parent.parent / "templates" / "docs"
+MODULE_TREE_OWNERSHIP_VALIDATOR = "validate_module_tree_ownership.py"
 
 
 class HTMLGenerator:
@@ -56,6 +64,46 @@ class HTMLGenerator:
         except Exception as e:
             raise FileSystemError(f"Failed to load module tree: {e}")
 
+    def _write_search_index(self, docs_dir: Path) -> int:
+        """Write search_index.json next to module_tree.json for the viewer's Ctrl+K search.
+
+        A standalone file (not embedded in index.html) so the initial page
+        load stays small — the viewer fetches it lazily, only when the
+        search modal is first opened, the same way it already fetches
+        individual .md files.
+
+        Returns:
+            Number of heading sections written to the index.
+        """
+        search_index = build_search_index(str(docs_dir))
+        search_index_path = docs_dir / SEARCH_INDEX_FILENAME
+        safe_write(search_index_path, json.dumps(search_index, ensure_ascii=False))
+        section_count = len(search_index)
+        logger.info(
+            "Documentation search index: wrote %s (%d sections) for Ctrl+K lazy load",
+            search_index_path.name,
+            section_count,
+        )
+        return section_count
+
+    def _copy_module_tree_ownership_validator(self, docs_dir: Path) -> None:
+        """Copy ownership validator next to module_tree.json (best-effort)."""
+        source = DOCS_TEMPLATES_DIR / MODULE_TREE_OWNERSHIP_VALIDATOR
+        if not source.is_file():
+            logger.warning(
+                "Module tree ownership validator not found at %s; skipping copy",
+                source,
+            )
+            return
+        dest = docs_dir / MODULE_TREE_OWNERSHIP_VALIDATOR
+        if source.resolve() == dest.resolve():
+            return
+        shutil.copyfile(source, dest)
+        logger.info(
+            "Copied %s into docs output for module_tree ownership checks",
+            MODULE_TREE_OWNERSHIP_VALIDATOR,
+        )
+
     def load_metadata(self, docs_dir: Path) -> Optional[Dict[str, Any]]:
         """
         Load metadata from documentation directory.
@@ -87,7 +135,7 @@ class HTMLGenerator:
         config: Optional[Dict[str, Any]] = None,
         docs_dir: Optional[Path] = None,
         metadata: Optional[Dict[str, Any]] = None,
-    ):
+    ) -> Dict[str, Any]:
         """
         Generate HTML documentation viewer.
 
@@ -100,13 +148,32 @@ class HTMLGenerator:
             config: Additional configuration
             docs_dir: Documentation directory (for auto-loading module_tree and metadata)
             metadata: Metadata dictionary (auto-loaded from docs_dir if not provided)
+
+        Returns:
+            Summary of generated viewer artifacts (paths and search index stats).
         """
+        search_index_sections = 0
+        search_index_written = False
+
         # Auto-load module_tree and metadata from docs_dir if not provided
         if docs_dir:
             if module_tree is None:
                 module_tree = self.load_module_tree(docs_dir)
             if metadata is None:
                 metadata = self.load_metadata(docs_dir)
+
+        # Build the section-level search index from the .md files already on
+        # disk. Best-effort: a failure here must not block index.html itself.
+        if docs_dir:
+            try:
+                search_index_sections = self._write_search_index(docs_dir)
+                search_index_written = True
+            except Exception as e:  # noqa: BLE001 — search index is optional polish
+                logger.warning("Search index generation skipped: %s", e)
+            try:
+                self._copy_module_tree_ownership_validator(docs_dir)
+            except Exception as e:  # noqa: BLE001 — validator script is optional tooling
+                logger.warning("Module tree ownership validator copy skipped: %s", e)
 
         # Default values
         if module_tree is None:
@@ -193,6 +260,20 @@ class HTMLGenerator:
         icon_output_path = output_path.parent / "codewiki-icon.png"
         if icon_path.exists() and icon_path.resolve() != icon_output_path.resolve():
             shutil.copyfile(icon_path, icon_output_path)
+
+        logger.info(
+            "GitHub Pages viewer: wrapped %s into %s (search at top of content area)",
+            template_path.name,
+            output_path.name,
+        )
+
+        return {
+            "index_html": str(output_path.resolve()),
+            "template": str(template_path.resolve()),
+            "search_index_written": search_index_written,
+            "search_index_sections": search_index_sections,
+            "search_index_filename": SEARCH_INDEX_FILENAME if search_index_written else None,
+        }
 
     def _build_info_content(self, metadata: Optional[Dict[str, Any]]) -> str:
         """

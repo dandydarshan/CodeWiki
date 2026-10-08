@@ -9,6 +9,8 @@ Supports multiple providers: openai-compatible, anthropic, bedrock, azure-openai
 
 import inspect
 import logging
+import time
+from types import SimpleNamespace
 from typing import Optional
 
 from openai.types import chat
@@ -379,6 +381,80 @@ def _extract_content(response, model: str) -> Optional[str]:
     return content
 
 
+def _stream_completion(client: OpenAI, include_usage: bool, **kwargs):
+    """Run a chat completion as a stream and assemble the complete response.
+
+    A non-streamed request returns nothing until the whole answer is generated,
+    so a long answer (clustering re-emits every component ID; reasoning models
+    think first) can outlast the HTTP read timeout and fail with
+    APITimeoutError. Streamed, the read timeout only bounds the gap between
+    chunks. Returns an object shaped like a ChatCompletion for _extract_content.
+    """
+    extra = {"stream_options": {"include_usage": True}} if include_usage else {}
+    stream = client.chat.completions.create(stream=True, **extra, **kwargs)
+    parts: list[str] = []
+    finish_reason = None
+    usage = None
+    started = time.monotonic()
+    chunks = 0
+    reasoning_chars = 0
+    try:
+        for chunk in stream:
+            chunks += 1
+            if getattr(chunk, "usage", None):
+                usage = chunk.usage
+            for choice in chunk.choices or ():
+                delta = getattr(choice, "delta", None)
+                if delta is not None and getattr(delta, "content", None):
+                    parts.append(delta.content)
+                # Reasoning models stream their thinking in a separate field
+                reasoning = delta is not None and (
+                    getattr(delta, "reasoning_content", None) or getattr(delta, "reasoning", None)
+                )
+                if isinstance(reasoning, str):
+                    reasoning_chars += len(reasoning)
+                if getattr(choice, "finish_reason", None):
+                    finish_reason = choice.finish_reason
+    except Exception as e:
+        # Seconds before the drop point at whatever limit closed the stream
+        # (a gateway or proxy cap on request duration shows a round number).
+        logger.warning(
+            "Streamed response from %s broke off after %.0fs (%d chunks, %d answer and %d "
+            "reasoning characters received): %s: %s",
+            kwargs.get("model"),
+            time.monotonic() - started,
+            chunks,
+            sum(len(p) for p in parts),
+            reasoning_chars,
+            type(e).__name__,
+            e,
+        )
+        raise
+    finally:
+        close = getattr(stream, "close", None)
+        if close:
+            close()
+    message = SimpleNamespace(content="".join(parts) if parts else None)
+    return SimpleNamespace(
+        choices=[SimpleNamespace(message=message, finish_reason=finish_reason)], usage=usage
+    )
+
+
+def _create_completion(client: OpenAI, **kwargs):
+    """Chat completion, streamed when the provider allows it (see _stream_completion)."""
+    try:
+        return _stream_completion(client, include_usage=True, **kwargs)
+    except BadRequestError as e:
+        message = str(e).lower()
+        if "stream" not in message:
+            raise
+        if "stream_options" in message or "include_usage" in message:
+            logger.info("Provider rejected stream_options; streaming without usage.")
+            return _stream_completion(client, include_usage=False, **kwargs)
+        logger.info("Provider rejected streaming; sending a non-streamed request.")
+        return client.chat.completions.create(**kwargs)
+
+
 def _messages(prompt: str, system_prompt: str | None) -> list[dict[str, str]]:
     messages = [{"role": "system", "content": system_prompt}] if system_prompt else []
     messages.append({"role": "user", "content": prompt})
@@ -432,11 +508,9 @@ def call_llm(
         "messages": _messages(prompt, system_prompt),
     }
 
+    token_key = primary_key
     try:
-        response = client.chat.completions.create(
-            **base_kwargs,
-            **{primary_key: config.max_tokens},
-        )
+        response = _create_completion(client, **base_kwargs, **{token_key: config.max_tokens})
     except BadRequestError as e:
         if _is_unsupported_token_param_error(e, primary_key):
             logger.info(
@@ -445,13 +519,31 @@ def call_llm(
                 model,
                 fallback_key,
             )
-            response = client.chat.completions.create(
-                **base_kwargs,
-                **{fallback_key: config.max_tokens},
-            )
+            token_key = fallback_key
+            response = _create_completion(client, **base_kwargs, **{token_key: config.max_tokens})
         else:
             raise
+    if _is_empty_reply(response):
+        # Gateways sometimes turn an upstream failure (throttling, a dropped
+        # backend call) into an empty "stop" reply instead of an error.
+        logger.warning(
+            "LLM %s returned an empty reply (finish_reason=%s); retrying once.",
+            model,
+            getattr(response.choices[0], "finish_reason", None),
+        )
+        response = _create_completion(client, **base_kwargs, **{token_key: config.max_tokens})
     return _extract_content(response, model)
+
+
+def _is_empty_reply(response) -> bool:
+    """True for a reply with no text that was not cut off at max_tokens."""
+    choices = getattr(response, "choices", None) or []
+    if not choices:
+        return True
+    content = getattr(getattr(choices[0], "message", None), "content", None)
+    if isinstance(content, str) and content.strip():
+        return False
+    return getattr(choices[0], "finish_reason", None) != "length"
 
 
 def _is_unsupported_token_param_error(err: BadRequestError, param: str) -> bool:

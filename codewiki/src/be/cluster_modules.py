@@ -1,9 +1,13 @@
 import ast
 import logging
+import re
 import traceback
 from collections import defaultdict
 from collections.abc import Callable
 from typing import Any
+
+import httpx
+from openai import APIConnectionError
 
 from codewiki.src.be.dependency_analyzer.models.core import Node
 from codewiki.src.be.dependency_analyzer.utils.paths import normalize_module_tree_ids
@@ -24,6 +28,22 @@ Completer = Callable[[str], str | None]
 # When whole-repo mode is chosen but leaf entry points touch fewer than this
 # fraction of parsed files, warn that coverage depends on agent exploration.
 LOW_COVERAGE_RATIO = 0.5
+
+# Clustering batches are sized so their component IDs (tiktoken count) use at
+# most max_tokens / this; see _cluster_batch_fits.
+CLUSTER_OUTPUT_BUDGET_DIVISOR = 4
+
+# A clustering batch whose request fails in transport (connection dropped,
+# timeout) is split once and retried while it has at least twice this many
+# leaf nodes; smaller ones are grouped by directory instead.
+MIN_SPLIT_BATCH = 20
+# After this many transport failures in one clustering run the endpoint is
+# treated as unreliable: the rest of the run groups components by directory
+# instead of waiting on more requests that are likely to drop.
+MAX_TRANSPORT_FAILURES = 2
+_transport_failures = {"count": 0}
+
+_FENCED_BLOCK_RE = re.compile(r"```[a-zA-Z]*\n(.*?)```", re.DOTALL)
 
 
 def format_potential_core_components(
@@ -73,13 +93,18 @@ def _cluster_batch_fits(node_ids: list[str], config: Config) -> bool:
     """Whether a single LLM clustering call can handle these nodes.
 
     The clustering response must re-emit every component ID verbatim, so the
-    joined ID list is a direct proxy for output size; keep 2x headroom under
-    max_tokens for dict syntax, module names/paths, and preamble.
+    joined ID list is a direct proxy for output size. It is counted with
+    tiktoken, but other models' tokenizers split file paths into far more
+    tokens: a Claude answer (IDs, dict syntax, module names/paths, preamble)
+    took about 2.6x the IDs' tiktoken count, so a batch sized at
+    max_tokens / 2 was cut off at max_tokens and one at max_tokens / 3 used
+    87% of it. The IDs may use a quarter of max_tokens, about 65% of it at
+    that ratio.
     """
     max_nodes = getattr(config, "max_leaf_nodes_per_cluster", DEFAULT_MAX_LEAF_NODES_PER_CLUSTER)
     if len(node_ids) > max_nodes:
         return False
-    output_budget = max(2048, config.max_tokens // 2)
+    output_budget = max(2048, config.max_tokens // CLUSTER_OUTPUT_BUDGET_DIVISOR)
     return count_tokens("\n".join(node_ids)) <= output_budget
 
 
@@ -153,6 +178,60 @@ def partition_leaf_nodes_by_structure(
     return batches
 
 
+def _untagged_module_dict(response: str) -> dict[str, Any] | None:
+    """Module dict in a response that omitted the <GROUPED_COMPONENTS> tags.
+
+    Models sometimes explain their grouping in prose and put the dict in a
+    code fence or inline. Accepts only a dict whose values all carry a
+    ``components`` list, so prose that merely contains braces is rejected.
+    """
+    candidates = _FENCED_BLOCK_RE.findall(response)
+    start, end = response.find("{"), response.rfind("}")
+    if start != -1 and end > start:
+        candidates.append(response[start : end + 1])
+    for candidate in candidates:
+        try:
+            value = ast.literal_eval(candidate.strip())
+        except (ValueError, SyntaxError, MemoryError, RecursionError):
+            continue
+        if (
+            isinstance(value, dict)
+            and value
+            and all(
+                isinstance(info, dict) and isinstance(info.get("components"), list)
+                for info in value.values()
+            )
+        ):
+            return value
+    return None
+
+
+def _directory_modules(
+    batch: list[str], components: dict[str, Node], config: Config, existing: dict[str, Any]
+) -> dict[str, Any]:
+    """Group a batch into modules by directory, without the LLM.
+
+    Each module's code fits the whole-module threshold, so none of them is
+    clustered further.
+    """
+    groups = partition_leaf_nodes_by_structure(
+        batch,
+        components,
+        lambda ids: get_clustering_input_token_count(ids, components)
+        <= config.max_token_per_module,
+    )
+    modules: dict[str, Any] = {}
+    for group in groups:
+        name = _batch_fallback_name(group, components, {**existing, **modules})
+        modules[name] = {
+            "path": _common_path_prefix(
+                [components[n].relative_path for n in group if n in components]
+            ),
+            "components": list(group),
+        }
+    return modules
+
+
 def _cluster_via_llm(
     leaf_nodes: list[str],
     components: dict[str, Node],
@@ -185,19 +264,26 @@ def _cluster_via_llm(
         return {}
 
     try:
-        if "<GROUPED_COMPONENTS>" not in response or "</GROUPED_COMPONENTS>" not in response:
-            logger.warning(
-                "Invalid LLM clustering response for %s: missing <GROUPED_COMPONENTS> "
-                "tags; falling back. Response preview: %s...",
+        if "<GROUPED_COMPONENTS>" in response and "</GROUPED_COMPONENTS>" in response:
+            response_content = response.split("<GROUPED_COMPONENTS>")[1].split(
+                "</GROUPED_COMPONENTS>"
+            )[0]
+            module_tree = eval(response_content)
+        else:
+            module_tree = _untagged_module_dict(response)
+            if module_tree is None:
+                logger.warning(
+                    "Invalid LLM clustering response for %s: missing <GROUPED_COMPONENTS> "
+                    "tags; falling back. Response preview: %s...",
+                    module_label,
+                    str(response)[:200],
+                )
+                return {}
+            logger.info(
+                "LLM clustering response for %s had no <GROUPED_COMPONENTS> tags; "
+                "using the module dict found in it.",
                 module_label,
-                str(response)[:200],
             )
-            return {}
-
-        response_content = response.split("<GROUPED_COMPONENTS>")[1].split("</GROUPED_COMPONENTS>")[
-            0
-        ]
-        module_tree = eval(response_content)
 
         if not isinstance(module_tree, dict):
             logger.error(f"Invalid module tree format - expected dict, got {type(module_tree)}")
@@ -263,6 +349,116 @@ def _batch_fallback_name(
     return resolve_unique_name(name, None, set(existing))
 
 
+def _cluster_batches(
+    batches: list[list[str]],
+    components: dict[str, Node],
+    config: Config,
+    current_module_tree: dict[str, Any],
+    current_module_name: str | None,
+    module_label: str,
+    completer: Completer | None,
+    split: bool = False,
+) -> dict[str, Any]:
+    """Cluster each batch with one LLM call and merge the results.
+
+    A batch whose request fails in transport (connection closed mid-answer,
+    timeout) is split once along the directory structure and retried, since
+    a gateway that caps request duration cuts off long answers. A batch that
+    still fails, or any batch once the run has seen MAX_TRANSPORT_FAILURES,
+    is grouped by directory instead (_directory_modules), so an unreliable
+    endpoint costs a bounded number of failed requests. With several
+    batches, one the LLM can't parse into modules is kept whole as a
+    fallback module.
+    """
+    module_tree: dict[str, Any] = {}
+    for i, batch in enumerate(batches, 1):
+        label = module_label if len(batches) == 1 else f"{module_label} (batch {i}/{len(batches)})"
+        if _transport_failures["count"] >= MAX_TRANSPORT_FAILURES:
+            _merge_module_trees(
+                module_tree, _directory_modules(batch, components, config, module_tree)
+            )
+            continue
+        try:
+            # Each batch gets the *unmodified* current_module_tree: passing the
+            # accumulating merge would flip format_cluster_prompt into its
+            # module-level variant mid-partition.
+            partial = _cluster_via_llm(
+                batch,
+                components,
+                config,
+                current_module_tree,
+                current_module_name,
+                label,
+                completer,
+            )
+        except (APIConnectionError, httpx.TransportError) as e:
+            _transport_failures["count"] += 1
+            if _transport_failures["count"] >= MAX_TRANSPORT_FAILURES:
+                logger.warning(
+                    "Clustering request for %s failed (%s: %s). The clustering endpoint has "
+                    "dropped %d requests, so the remaining components are grouped by directory "
+                    "instead of by the LLM. A faster or more reliable clustering model avoids "
+                    "this: codewiki config set --cluster-model <model>",
+                    label,
+                    type(e).__name__,
+                    e,
+                    _transport_failures["count"],
+                )
+                partial = _directory_modules(batch, components, config, module_tree)
+            elif split or len(batch) < 2 * MIN_SPLIT_BATCH:
+                logger.warning(
+                    "Clustering request for %s failed (%s: %s); grouping its %d leaf nodes "
+                    "by directory.",
+                    label,
+                    type(e).__name__,
+                    e,
+                    len(batch),
+                )
+                partial = _directory_modules(batch, components, config, module_tree)
+            else:
+                half = (len(batch) + 1) // 2
+                smaller = partition_leaf_nodes_by_structure(
+                    batch, components, lambda ids, half=half: len(ids) <= half
+                )
+                logger.warning(
+                    "Clustering request for %s failed (%s: %s); retrying its %d leaf nodes "
+                    "as %d smaller batches.",
+                    label,
+                    type(e).__name__,
+                    e,
+                    len(batch),
+                    len(smaller),
+                )
+                partial = _cluster_batches(
+                    smaller,
+                    components,
+                    config,
+                    current_module_tree,
+                    current_module_name,
+                    label,
+                    completer,
+                    split=True,
+                )
+        if not partial and len(batches) > 1:
+            name = _batch_fallback_name(batch, components, module_tree)
+            partial = {
+                name: {
+                    "path": _common_path_prefix(
+                        [components[n].relative_path for n in batch if n in components]
+                    ),
+                    "components": list(batch),
+                }
+            }
+            logger.warning(
+                "Clustering failed for %s; keeping its %d components as fallback module '%s'.",
+                label,
+                len(batch),
+                name,
+            )
+        _merge_module_trees(module_tree, partial)
+    return module_tree
+
+
 def cluster_modules(
     leaf_nodes: list[str],
     components: dict[str, Node],
@@ -284,6 +480,8 @@ def cluster_modules(
     """
     current_module_tree = {} if current_module_tree is None else current_module_tree
     current_module_path = [] if current_module_path is None else current_module_path
+    if current_module_name is None:
+        _transport_failures["count"] = 0  # a new clustering run
     _, potential_core_components_with_code = format_potential_core_components(
         leaf_nodes, components
     )
@@ -336,57 +534,24 @@ def cluster_modules(
         leaf_nodes, components, lambda ids: _cluster_batch_fits(ids, config)
     )
 
-    if len(batches) == 1:
-        module_tree = _cluster_via_llm(
-            batches[0],
-            components,
-            config,
-            current_module_tree,
-            current_module_name,
-            module_label,
-            completer,
-        )
-        if not module_tree:
-            return {}
-    else:
+    if len(batches) > 1:
         logger.info(
             "Partitioned %d leaf nodes for %s into %d structure-based batches for clustering.",
             len(leaf_nodes),
             module_label,
             len(batches),
         )
-        module_tree = {}
-        for i, batch in enumerate(batches, 1):
-            batch_label = f"{module_label} (batch {i}/{len(batches)})"
-            # Each batch gets the *unmodified* current_module_tree: passing the
-            # accumulating merge would flip format_cluster_prompt into its
-            # module-level variant mid-partition.
-            partial = _cluster_via_llm(
-                batch,
-                components,
-                config,
-                current_module_tree,
-                current_module_name,
-                batch_label,
-                completer,
-            )
-            if not partial:
-                name = _batch_fallback_name(batch, components, module_tree)
-                partial = {
-                    name: {
-                        "path": _common_path_prefix(
-                            [components[n].relative_path for n in batch if n in components]
-                        ),
-                        "components": list(batch),
-                    }
-                }
-                logger.warning(
-                    "Clustering failed for %s; keeping its %d components as fallback module '%s'.",
-                    batch_label,
-                    len(batch),
-                    name,
-                )
-            _merge_module_trees(module_tree, partial)
+    module_tree = _cluster_batches(
+        batches,
+        components,
+        config,
+        current_module_tree,
+        current_module_name,
+        module_label,
+        completer,
+    )
+    if not module_tree:
+        return {}
 
     # check if the module tree is valid
     if len(module_tree) <= 1:

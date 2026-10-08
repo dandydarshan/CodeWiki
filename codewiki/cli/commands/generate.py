@@ -333,6 +333,13 @@ def _invalidate_affected_modules(output_dir: Path, changed_files: list[str], log
     help="Retries for a failing agent tool call (overrides config)",
 )
 @click.option(
+    "--max-context-tokens",
+    type=click.IntRange(min=0),
+    default=None,
+    help="Model context window in tokens; agent history is trimmed to fit it "
+    "(overrides config; 0 = learn it from the provider's context-length error)",
+)
+@click.option(
     "--prompt-caching/--no-prompt-caching",
     default=None,
     help="Add prompt-cache breakpoints to agentic LLM calls; auto-falls back to "
@@ -459,6 +466,7 @@ def generate_command(
     max_depth: int | None,
     request_limit: int | None,
     agent_retries: int | None,
+    max_context_tokens: int | None,
     prompt_caching: bool | None,
     artifacts: bool = True,
     crosslinks: bool = True,
@@ -793,6 +801,9 @@ def generate_command(
                 "agent_retries": agent_retries
                 if agent_retries is not None
                 else config.agent_retries,
+                "max_context_tokens": max_context_tokens
+                if max_context_tokens is not None
+                else config.max_context_tokens,
                 # Gitignore setting (runtime override takes precedence)
                 "use_gitignore": use_gitignore
                 if use_gitignore is not None

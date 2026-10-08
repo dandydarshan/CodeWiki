@@ -24,6 +24,7 @@ from pydantic_ai.models.fallback import FallbackModel
 from pydantic_ai.providers.openai import OpenAIProvider
 from openai import OpenAI, BadRequestError
 
+from codewiki.src.be import context_budget
 from codewiki.src.config import Config
 
 logger = logging.getLogger(__name__)
@@ -141,11 +142,21 @@ class CachingOpenAIModel(CompatibleOpenAIModel):
     # __init__ still resolve them.
     _prompt_caching_enabled = False
     _cache_registry_key = ("", "")
+    _context_window = 0
 
-    def __init__(self, model_name, *, prompt_caching=True, cache_registry_key="", **kwargs):
+    def __init__(
+        self,
+        model_name,
+        *,
+        prompt_caching=True,
+        cache_registry_key="",
+        context_window=0,
+        **kwargs,
+    ):
         super().__init__(model_name, **kwargs)
         self._prompt_caching_enabled = prompt_caching
         self._cache_registry_key = (cache_registry_key, model_name)
+        self._context_window = context_window or 0
 
     @property
     def _prompt_caching_active(self) -> bool:
@@ -176,7 +187,55 @@ class CachingOpenAIModel(CompatibleOpenAIModel):
                 _add_cache_control_to_message(openai_messages[-1])
         return openai_messages
 
+    def _input_budget(self, model_settings) -> int:
+        """Input-token budget for one request, or 0 while the window is unknown."""
+        settings = {**(getattr(self, "settings", None) or {}), **(model_settings or {})}
+        max_output = settings.get("max_tokens") or settings.get("max_completion_tokens") or 0
+        learned = context_budget.get_limit(self._cache_registry_key)
+        window = self._context_window or learned.window
+        return context_budget.input_budget(window, max_output, learned.token_ratio)
+
     async def _completions_create(self, messages, stream, model_settings, model_request_parameters):
+        """Send a request trimmed to the context window.
+
+        Agent histories grow with every tool result. When the window is known
+        (configured or learned) the history is trimmed before sending; when the
+        provider still rejects the request as too long, the limit it reports is
+        learned and the request is retried once, trimmed to fit.
+        """
+        budget = self._input_budget(model_settings)
+        if budget:
+            messages = context_budget.fit_messages(messages, budget)
+        try:
+            return await self._send_with_cache_fallback(
+                messages, stream, model_settings, model_request_parameters
+            )
+        except ModelHTTPError as e:
+            error = context_budget.parse_context_error(e.body) if e.status_code == 400 else None
+            if error is None:
+                raise
+            estimated = context_budget.estimate_tokens(messages)
+            context_budget.learn_limit(self._cache_registry_key, error, estimated)
+            budget = self._input_budget(model_settings) or int(
+                estimated * context_budget.UNKNOWN_LIMIT_SHRINK
+            )
+            trimmed = context_budget.fit_messages(messages, budget)
+            if trimmed is messages:
+                raise
+            logger.warning(
+                "Request to %s exceeded the model's context window%s; retrying with "
+                "older tool results removed (set max_context_tokens to avoid the "
+                "failed first attempt).",
+                self.model_name,
+                f" ({error.limit} tokens)" if error.limit else "",
+            )
+            return await self._send_with_cache_fallback(
+                trimmed, stream, model_settings, model_request_parameters
+            )
+
+    async def _send_with_cache_fallback(
+        self, messages, stream, model_settings, model_request_parameters
+    ):
         if not self._prompt_caching_active:
             return await super()._completions_create(
                 messages, stream, model_settings, model_request_parameters
@@ -186,7 +245,8 @@ class CachingOpenAIModel(CompatibleOpenAIModel):
                 messages, stream, model_settings, model_request_parameters
             )
         except ModelHTTPError as e:
-            if e.status_code not in (400, 422):
+            if e.status_code not in (400, 422) or context_budget.parse_context_error(e.body):
+                # A too-long request is not about the cache markers.
                 raise
             _CACHE_UNSUPPORTED.add(self._cache_registry_key)
             logger.warning(
@@ -239,6 +299,7 @@ def create_main_model(config: Config) -> CachingOpenAIModel:
         model_name=config.main_model,
         prompt_caching=config.prompt_caching,
         cache_registry_key=config.llm_base_url or "",
+        context_window=getattr(config, "max_context_tokens", 0),
         provider=OpenAIProvider(base_url=config.llm_base_url, api_key=config.llm_api_key),
         settings=_build_model_settings(config, config.main_model),
     )
@@ -250,6 +311,7 @@ def create_fallback_model(config: Config) -> CachingOpenAIModel:
         model_name=config.fallback_model,
         prompt_caching=config.prompt_caching,
         cache_registry_key=config.llm_base_url or "",
+        context_window=getattr(config, "max_context_tokens", 0),
         provider=OpenAIProvider(base_url=config.llm_base_url, api_key=config.llm_api_key),
         settings=_build_model_settings(config, config.fallback_model),
     )

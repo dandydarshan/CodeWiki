@@ -32,6 +32,9 @@ DEFAULT_MAX_TOKEN_PER_LEAF_MODULE = 4_000
 DEFAULT_REQUEST_LIMIT = 100
 # pydantic-ai retries a failing tool call (and output validation) once by default.
 DEFAULT_AGENT_RETRIES = 3
+# Model context window in tokens (input + output). 0 means unknown: the window
+# is learned from the provider's first "maximum context length" error.
+DEFAULT_MAX_CONTEXT_TOKENS = 0
 # Super-group the flat top level into architectural subsystems only when it
 # has more than this many modules; 0 or negative disables the pass.
 DEFAULT_MIN_MODULES_FOR_SUPER_GROUPING = 3
@@ -107,6 +110,7 @@ class Config:
     # Agent run limits (model requests per run, retries per failing tool call)
     request_limit: int = DEFAULT_REQUEST_LIMIT
     agent_retries: int = DEFAULT_AGENT_RETRIES
+    max_context_tokens: int = DEFAULT_MAX_CONTEXT_TOKENS
     # Prompt caching for agentic/multi-turn calls (auto-disables per model if
     # the provider rejects cache_control markers)
     prompt_caching: bool = True
@@ -251,6 +255,7 @@ class Config:
         max_depth: int = MAX_DEPTH,
         request_limit: int = DEFAULT_REQUEST_LIMIT,
         agent_retries: int = DEFAULT_AGENT_RETRIES,
+        max_context_tokens: int = DEFAULT_MAX_CONTEXT_TOKENS,
         agent_instructions: dict[str, Any] | None = None,
         use_gitignore: bool = True,
         prompt_caching: bool = True,
@@ -286,6 +291,8 @@ class Config:
             max_depth: Maximum depth for hierarchical decomposition
             request_limit: Maximum model requests per agent run
             agent_retries: Retries for a failing tool call or output validation
+            max_context_tokens: Model context window in tokens; agent history is
+                trimmed to fit it (0 = learn it from the provider's error)
             agent_instructions: Custom agent instructions dict
             use_gitignore: Whether to apply Git ignore rules
             prompt_caching: Whether to add prompt-cache breakpoints to agentic calls
@@ -323,6 +330,7 @@ class Config:
             max_leaf_nodes_per_cluster=max_leaf_nodes_per_cluster,
             request_limit=request_limit,
             agent_retries=agent_retries,
+            max_context_tokens=max_context_tokens,
             agent_instructions=agent_instructions,
             use_gitignore=use_gitignore,
             prompt_caching=prompt_caching,

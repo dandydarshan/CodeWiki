@@ -157,6 +157,7 @@ class CLIDocumentationGenerator:
                 max_depth=self.config.get("max_depth", 2),
                 request_limit=self.config.get("request_limit", 100),
                 agent_retries=self.config.get("agent_retries", 3),
+                max_context_tokens=self.config.get("max_context_tokens", 0),
                 agent_instructions=self.config.get("agent_instructions"),
                 use_gitignore=self.config.get("use_gitignore", True),
                 prompt_caching=self.config.get("prompt_caching", True),

@@ -138,6 +138,7 @@ class ConfigManager:
         max_depth: Optional[int] = None,
         request_limit: Optional[int] = None,
         agent_retries: Optional[int] = None,
+        max_context_tokens: Optional[int] = None,
         provider: Optional[str] = None,
         aws_region: Optional[str] = None,
         api_version: Optional[str] = None,
@@ -161,6 +162,7 @@ class ConfigManager:
             max_depth: Maximum depth for hierarchical decomposition
             request_limit: Maximum model requests per agent run
             agent_retries: Retries for a failing tool call
+            max_context_tokens: Model context window in tokens (0 = auto)
             provider: LLM provider type (openai-compatible, anthropic, bedrock, azure-openai)
             aws_region: AWS region for Bedrock provider
             api_version: Azure OpenAI API version
@@ -213,6 +215,8 @@ class ConfigManager:
             self._config.request_limit = request_limit
         if agent_retries is not None:
             self._config.agent_retries = agent_retries
+        if max_context_tokens is not None:
+            self._config.max_context_tokens = max_context_tokens
         if provider is not None:
             self._config.provider = provider
         if aws_region is not None:

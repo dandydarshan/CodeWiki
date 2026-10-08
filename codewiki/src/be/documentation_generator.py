@@ -13,6 +13,7 @@ from codewiki.src.be.cluster_modules import (
     get_clustering_input_token_count,
     super_group_modules,
 )
+from codewiki.src.be.crosslinker import CrossLinkReport, crosslink_docs
 from codewiki.src.be.dependency_analyzer import DependencyGraphBuilder
 from codewiki.src.be.dependency_analyzer.analyzers.artifact import render_artifact_index
 from codewiki.src.be.doc_layout import (
@@ -214,6 +215,28 @@ class DocumentationGenerator:
             return []
         module_tree = file_manager.load_json(module_tree_path)
         return find_missing_module_docs(module_tree, working_dir)
+
+    def crosslink_documentation(
+        self, working_dir: str, components: dict[str, Any] | None = None
+    ) -> CrossLinkReport | None:
+        """Repair and add cross-links between the generated pages (no LLM calls).
+
+        Best-effort: a failure is logged and never fails the run, since the
+        pages themselves are already complete.
+        """
+        if not getattr(self.config, "crosslinks_enabled", True):
+            return None
+        module_tree_path = os.path.join(working_dir, MODULE_TREE_FILENAME)
+        module_tree = (
+            file_manager.load_json(module_tree_path) if os.path.exists(module_tree_path) else {}
+        )
+        try:
+            report = crosslink_docs(working_dir, module_tree, components)
+        except Exception as e:  # noqa: BLE001 — cross-linking is an optional polish pass
+            logger.warning(f"Cross-linking skipped: {e}")
+            return None
+        logger.info(f"🔗 Cross-linking: {report.summary()}")
+        return report
 
     async def generate_module_documentation(
         self, components: dict[str, Any], leaf_nodes: list[str]
@@ -487,6 +510,7 @@ class DocumentationGenerator:
             # Generate module documentation using dynamic programming approach
             # This processes leaf modules first, then parent modules
             working_dir = await self.generate_module_documentation(components, leaf_nodes)
+            self.crosslink_documentation(working_dir, components)
 
             # Create documentation metadata
             self.create_documentation_metadata(working_dir, components, len(leaf_nodes))

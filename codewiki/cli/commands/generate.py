@@ -345,6 +345,12 @@ def _invalidate_affected_modules(output_dir: Path, changed_files: list[str], log
     "script files as part of the dependency graph (default: enabled)",
 )
 @click.option(
+    "--crosslinks/--no-crosslinks",
+    default=True,
+    help="After generation, repair broken page links and link mentions of modules and "
+    "components to the page/section documenting them (default: enabled)",
+)
+@click.option(
     "--artifact-token-budget",
     type=int,
     default=200_000,
@@ -455,6 +461,7 @@ def generate_command(
     agent_retries: int | None,
     prompt_caching: bool | None,
     artifacts: bool = True,
+    crosslinks: bool = True,
     artifact_token_budget: int = 200_000,
     with_prose: bool = False,
     flat: bool = False,
@@ -800,6 +807,7 @@ def generate_command(
                 "with_prose": with_prose,
                 # Docs layout (runtime-only; --update keeps the stored one)
                 "layout": layout,
+                "crosslinks_enabled": crosslinks,
                 # Incremental updater (runtime-only)
                 "update": update,
                 "update_options": {

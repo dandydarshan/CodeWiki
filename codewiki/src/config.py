@@ -123,6 +123,8 @@ class Config:
     with_prose: bool = False
     # Docs layout (LAYOUT_HIERARCHICAL or LAYOUT_FLAT)
     layout: str = DEFAULT_LAYOUT
+    # Post-generation pass that repairs and adds wiki cross-links between pages
+    crosslinks_enabled: bool = True
 
     @property
     def artifact_exclude(self) -> list[str] | None:
@@ -256,6 +258,7 @@ class Config:
         artifact_token_budget: int = DEFAULT_ARTIFACT_TOKEN_BUDGET,
         with_prose: bool = False,
         layout: str = DEFAULT_LAYOUT,
+        crosslinks_enabled: bool = True,
     ) -> "Config":
         """
         Create configuration for CLI context.
@@ -291,6 +294,7 @@ class Config:
             artifact_token_budget: Total token budget for artifact file contents
             with_prose: Also read README and docs/ as a `prose` artifact class
             layout: Docs layout, "hierarchical" (nested folders) or "flat"
+            crosslinks_enabled: Repair and add cross-links between pages after generation
 
         Returns:
             Config instance
@@ -326,4 +330,5 @@ class Config:
             artifact_token_budget=artifact_token_budget,
             with_prose=with_prose,
             layout=layout,
+            crosslinks_enabled=crosslinks_enabled,
         )

@@ -112,6 +112,26 @@ files are part of the dependency graph and get documented. Details in
 These four flags are runtime-only. `codewiki config set` and
 `codewiki config agent` have no counterpart for them yet.
 
+### Cross-linking
+
+After the pages are written (and after every `--update`), a deterministic
+pass with no LLM calls turns the docs into a linked wiki:
+
+- repairs existing `.md` links (absolute or nested paths, name variants,
+  stale `#anchors`) and unwraps links to pages that do not exist;
+- links the first mention per `##` section of a module name, a page
+  filename or a component name to the page, and for components the section,
+  that documents it. Code blocks, headings and existing links are left alone.
+  Common-word component names such as `Config` are linked only when written
+  as inline code;
+- appends a `Related pages` block for the parent, sub-modules, dependency
+  neighbours (or, on `overview.md`, the top-level modules) that the page
+  does not link yet. The block is rebuilt on every run.
+
+| Flag | Default | Meaning |
+| --- | --- | --- |
+| `--crosslinks` / `--no-crosslinks` | enabled | Turn the cross-linking pass on or off |
+
 ### Incremental updates (new in 2.0)
 
 Refresh existing documentation after the code changed, instead of rebuilding

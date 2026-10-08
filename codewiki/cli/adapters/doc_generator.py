@@ -164,6 +164,7 @@ class CLIDocumentationGenerator:
                 artifact_token_budget=self.config.get("artifact_token_budget", 200_000),
                 with_prose=self.config.get("with_prose", False),
                 layout=self.config.get("layout", DEFAULT_LAYOUT),
+                crosslinks_enabled=self.config.get("crosslinks_enabled", True),
             )
 
             # Run backend documentation generation
@@ -373,6 +374,7 @@ class CLIDocumentationGenerator:
 
             # Run the actual documentation generation
             await doc_generator.generate_module_documentation(components, leaf_nodes)
+            self._crosslink(doc_generator, working_dir, components)
 
             if self.verbose:
                 self.progress_tracker.update_stage(0.9, "Creating repository overview...")
@@ -399,6 +401,11 @@ class CLIDocumentationGenerator:
             )
 
         self.progress_tracker.complete_stage()
+
+    def _crosslink(self, doc_generator, working_dir, components) -> None:
+        report = doc_generator.crosslink_documentation(working_dir, components)
+        if report is not None and self.verbose:
+            self.progress_tracker.update_stage(0.95, f"Cross-links: {report.summary()}")
 
     # ------------------------------------------------------------------
     # Incremental update helpers
@@ -451,6 +458,7 @@ class CLIDocumentationGenerator:
             )
         working_dir = str(self.output_dir.absolute())
         if record.outcome in ("incremental", "no_change"):
+            self._crosslink(doc_generator, working_dir, components)
             # create_documentation_metadata rewrites metadata.json from scratch;
             # keep the history of earlier updates so a chain of updates accumulates.
             prior_history = self._read_update_history(working_dir)

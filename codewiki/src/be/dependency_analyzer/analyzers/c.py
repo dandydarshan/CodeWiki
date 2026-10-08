@@ -6,6 +6,7 @@ import os
 from tree_sitter import Parser, Language
 import tree_sitter_c
 from codewiki.src.be.dependency_analyzer.models.core import Node, CallRelationship
+from codewiki.src.be.dependency_analyzer.utils.paths import repo_relpath
 
 logger = logging.getLogger(__name__)
 
@@ -35,13 +36,7 @@ class TreeSitterCAnalyzer:
         return rel_path.replace("/", ".").replace("\\", ".")
 
     def _get_relative_path(self) -> str:
-        if self.repo_path:
-            try:
-                return os.path.relpath(str(self.file_path), self.repo_path)
-            except ValueError:
-                return str(self.file_path)
-        else:
-            return str(self.file_path)
+        return repo_relpath(self.file_path, self.repo_path)
 
     def _get_component_id(self, name: str) -> str:
         rel_path = self._get_relative_path()

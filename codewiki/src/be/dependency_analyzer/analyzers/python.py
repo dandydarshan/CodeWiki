@@ -1,6 +1,5 @@
 import ast
 import logging
-import os
 import warnings
 from typing import Dict, List, Optional, Set, Tuple
 
@@ -9,6 +8,7 @@ from codewiki.src.be.dependency_analyzer.utils.external_symbols import (
     PYTHON_OBJECT_METHODS,
     PYTHON_STDLIB_MODULES,
 )
+from codewiki.src.be.dependency_analyzer.utils.paths import repo_relpath
 
 logger = logging.getLogger(__name__)
 
@@ -78,9 +78,7 @@ class PythonASTAnalyzer(ast.NodeVisitor):
 
     def _get_relative_path(self) -> str:
         """Get relative path from repo root."""
-        if self.repo_path:
-            return os.path.relpath(self.file_path, self.repo_path)
-        return str(self.file_path)
+        return repo_relpath(self.file_path, self.repo_path)
 
     def _get_module_path(self) -> str:
         try:

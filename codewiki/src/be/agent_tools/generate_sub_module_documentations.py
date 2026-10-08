@@ -14,6 +14,7 @@ from codewiki.src.be.prompt_template import (
 )
 from codewiki.src.be.utils import is_complex_module, count_tokens
 from codewiki.src.be.cluster_modules import format_potential_core_components
+from codewiki.src.be.dependency_analyzer.utils.paths import normalize_component_ids
 
 import logging
 
@@ -37,6 +38,9 @@ async def generate_sub_module_documentation(
 
     deps = ctx.deps
     previous_module_name = deps.current_module_name
+    sub_module_specs = {
+        name: normalize_component_ids(ids) for name, ids in sub_module_specs.items()
+    }
 
     # Create fallback models from config
     fallback_models = create_fallback_models(deps.config)

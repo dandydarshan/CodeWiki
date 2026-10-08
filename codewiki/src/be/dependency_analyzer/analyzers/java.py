@@ -11,6 +11,7 @@ from codewiki.src.be.dependency_analyzer.utils.external_symbols import (
     JAVA_OBJECT_METHODS,
     is_external_symbol,
 )
+from codewiki.src.be.dependency_analyzer.utils.paths import repo_relpath
 
 logger = logging.getLogger(__name__)
 
@@ -43,13 +44,7 @@ class TreeSitterJavaAnalyzer:
 
     def _get_relative_path(self) -> str:
         """Get relative path from repo root."""
-        if self.repo_path:
-            try:
-                return os.path.relpath(str(self.file_path), self.repo_path)
-            except ValueError:
-                return str(self.file_path)
-        else:
-            return str(self.file_path)
+        return repo_relpath(self.file_path, self.repo_path)
 
     def _get_component_id(self, name: str, parent_class: str = None) -> str:
         rel_path = self._get_relative_path()

@@ -16,6 +16,7 @@ from codewiki.src.be.cluster_modules import (
 from codewiki.src.be.crosslinker import CrossLinkReport, crosslink_docs
 from codewiki.src.be.dependency_analyzer import DependencyGraphBuilder
 from codewiki.src.be.dependency_analyzer.analyzers.artifact import render_artifact_index
+from codewiki.src.be.dependency_analyzer.utils.paths import normalize_module_tree_ids
 from codewiki.src.be.doc_layout import (
     config_layout,
     list_doc_files,
@@ -449,6 +450,15 @@ class DocumentationGenerator:
             file_manager.ensure_directory(working_dir)
             first_module_tree_path = os.path.join(working_dir, FIRST_MODULE_TREE_FILENAME)
             module_tree_path = os.path.join(working_dir, MODULE_TREE_FILENAME)
+
+            # Trees saved by older Windows runs hold backslash component IDs;
+            # rewrite them to the OS-independent form before anything reads them.
+            for tree_path in (first_module_tree_path, module_tree_path):
+                if os.path.exists(tree_path):
+                    saved_tree = file_manager.load_json(tree_path)
+                    if normalize_module_tree_ids(saved_tree):
+                        logger.info("Normalized component path separators in %s", tree_path)
+                        file_manager.save_json(saved_tree, tree_path)
 
             # Check if module tree exists
             if os.path.exists(first_module_tree_path):

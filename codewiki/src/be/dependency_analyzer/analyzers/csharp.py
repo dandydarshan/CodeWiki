@@ -19,7 +19,6 @@ Known limitations (deliberately punted):
 import logging
 from typing import List, Optional, Tuple
 from pathlib import Path
-import os
 
 from tree_sitter import Parser, Language
 import tree_sitter_c_sharp
@@ -27,6 +26,7 @@ from codewiki.src.be.dependency_analyzer.models.core import Node, CallRelationsh
 from codewiki.src.be.dependency_analyzer.utils.external_symbols import (
     CSHARP_OBJECT_METHODS,
 )
+from codewiki.src.be.dependency_analyzer.utils.paths import repo_relpath
 
 logger = logging.getLogger(__name__)
 
@@ -89,12 +89,7 @@ class TreeSitterCSharpAnalyzer:
         self._analyze()
 
     def _get_relative_path(self) -> str:
-        if self.repo_path:
-            try:
-                return os.path.relpath(str(self.file_path), self.repo_path)
-            except ValueError:
-                return str(self.file_path)
-        return str(self.file_path)
+        return repo_relpath(self.file_path, self.repo_path)
 
     def _get_component_id(self, name: str) -> str:
         return f"{self._get_relative_path()}::{name}"

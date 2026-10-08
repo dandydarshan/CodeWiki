@@ -28,6 +28,10 @@ from caw import ToolKit, tool
 from mcp.server.fastmcp import Context
 
 from codewiki.src.be.agent_tools.deps import CodeWikiDeps
+from codewiki.src.be.dependency_analyzer.utils.paths import (
+    normalize_component_id,
+    normalize_component_ids,
+)
 from codewiki.src.be.doc_layout import config_layout, module_doc_file
 from codewiki.src.be.module_naming import skipped_report, plan_sub_module_specs, sub_module_report
 
@@ -105,6 +109,7 @@ class CawToolKit(
     async def read_code_components(self, component_ids: list[str]) -> str:
         results = []
         for cid in component_ids:
+            cid = normalize_component_id(cid)
             if cid not in self._deps.components:
                 results.append(f"# Component {cid} not found")
             else:
@@ -284,6 +289,9 @@ class CawToolKit(
     def _run_sub_modules(self, sub_module_specs: dict[str, list[str]]) -> str:
         deps = self._deps
         previous_module_name = deps.current_module_name
+        sub_module_specs = {
+            name: normalize_component_ids(ids) for name, ids in sub_module_specs.items()
+        }
 
         # Resolve name collisions against the module tree and files already on
         # disk before touching the tree (issue #76): names are unique across the wiki.

@@ -1,5 +1,6 @@
 from pydantic_ai import RunContext, Tool
 from codewiki.src.be.agent_tools.deps import CodeWikiDeps
+from codewiki.src.be.dependency_analyzer.utils.paths import normalize_component_id
 
 
 async def read_code_components(ctx: RunContext[CodeWikiDeps], component_ids: list[str]) -> str:
@@ -12,6 +13,7 @@ async def read_code_components(ctx: RunContext[CodeWikiDeps], component_ids: lis
     results = []
 
     for component_id in component_ids:
+        component_id = normalize_component_id(component_id)
         if component_id not in ctx.deps.components:
             results.append(f"# Component {component_id} not found")
         else:

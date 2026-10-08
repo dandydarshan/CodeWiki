@@ -6,6 +6,7 @@ from collections.abc import Callable
 from typing import Any
 
 from codewiki.src.be.dependency_analyzer.models.core import Node
+from codewiki.src.be.dependency_analyzer.utils.paths import normalize_module_tree_ids
 from codewiki.src.be.llm_services import call_llm
 from codewiki.src.be.module_naming import resolve_unique_name, sanitize_module_name
 from codewiki.src.be.prompt_template import format_cluster_prompt, format_super_group_prompt
@@ -201,6 +202,7 @@ def _cluster_via_llm(
         if not isinstance(module_tree, dict):
             logger.error(f"Invalid module tree format - expected dict, got {type(module_tree)}")
             return {}
+        normalize_module_tree_ids(module_tree)
 
     except Exception as e:  # noqa: BLE001 — a failed LLM call must not abort clustering
         logger.warning(

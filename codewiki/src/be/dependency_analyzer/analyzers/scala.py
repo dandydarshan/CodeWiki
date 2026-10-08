@@ -17,13 +17,13 @@ companion never collide.
 """
 
 import logging
-import os
 from pathlib import Path
 
 import tree_sitter_scala
 from tree_sitter import Language, Parser
 
 from codewiki.src.be.dependency_analyzer.models.core import CallRelationship, Node
+from codewiki.src.be.dependency_analyzer.utils.paths import repo_relpath
 
 logger = logging.getLogger(__name__)
 
@@ -186,12 +186,7 @@ class TreeSitterScalaAnalyzer:
     # ------------------------------------------------------------------
 
     def _get_relative_path(self) -> str:
-        if self.repo_path:
-            try:
-                return os.path.relpath(str(self.file_path), self.repo_path)
-            except ValueError:
-                return str(self.file_path)
-        return str(self.file_path)
+        return repo_relpath(self.file_path, self.repo_path)
 
     def _get_component_id(self, logical_name: str) -> str:
         return f"{self._get_relative_path()}::{logical_name}"

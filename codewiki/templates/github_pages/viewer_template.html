@@ -126,10 +126,22 @@
             display: none;
         }
 
+        /* Search bar stays pinned to the top of the viewport while reading */
         .content-toolbar {
+            position: sticky;
+            top: 0;
+            z-index: 100;
             width: 100%;
             min-width: 0;
             margin-bottom: 12px;
+            padding: 12px 0;
+            background: var(--page-bg);
+            border-bottom: 1px solid transparent;
+            transition: border-color 0.2s;
+        }
+
+        .content-toolbar.stuck {
+            border-bottom-color: var(--border-color);
         }
 
         .content-toolbar .search-trigger {
@@ -667,7 +679,7 @@
         .markdown-content h4,
         .markdown-content h5,
         .markdown-content h6 {
-            scroll-margin-top: 1rem;
+            scroll-margin-top: 80px;
         }
 
         .markdown-content h1 {
@@ -1190,17 +1202,13 @@
 
             .content {
                 margin-left: 0;
-                padding: 72px 20px 20px;
+                padding: 0 20px 20px;
                 max-width: 100%;
             }
 
-            .markdown-content h1,
-            .markdown-content h2,
-            .markdown-content h3,
-            .markdown-content h4,
-            .markdown-content h5,
-            .markdown-content h6 {
-                scroll-margin-top: 64px;
+            /* leave room for the fixed menu button on the left */
+            .content-toolbar {
+                padding-left: 52px;
             }
         }
     </style>
@@ -1384,6 +1392,7 @@
             setupMobileDrawer();
             setupLinkInterception();
             setupSearchModal();
+            setupStickyToolbar();
             initMermaid();
 
             window.addEventListener('hashchange', onHashChange);
@@ -1547,6 +1556,31 @@
                 group.classList.remove('collapsed');
                 group = group.parentElement && group.parentElement.closest('.nav-group');
             }
+            if (active) revealInSidebar(active);
+        }
+
+        // Scroll the sidebar so the current page's entry is visible (centered
+        // when it was out of view), e.g. after following a cross-link.
+        function revealInSidebar(item) {
+            if (!item.offsetParent) return; // hidden by the page filter
+            const sidebar = document.getElementById('sidebar');
+            const box = sidebar.getBoundingClientRect();
+            const rect = item.getBoundingClientRect();
+            if (rect.top >= box.top + 8 && rect.bottom <= box.bottom - 8) return;
+            sidebar.scrollTo({
+                top: sidebar.scrollTop + rect.top - box.top - (box.height - rect.height) / 2,
+                behavior: currentFile ? 'smooth' : 'auto'
+            });
+        }
+
+        // Outline the pinned search bar once content scrolls beneath it.
+        function setupStickyToolbar() {
+            const toolbar = document.querySelector('.content-toolbar');
+            const update = function() {
+                toolbar.classList.toggle('stuck', toolbar.getBoundingClientRect().top <= 0 && window.scrollY > 0);
+            };
+            window.addEventListener('scroll', update, { passive: true });
+            update();
         }
 
         function setupNavFilter() {

@@ -229,10 +229,11 @@ def flake8(file_path: str) -> str:
     """Run flake8 on a given file and return the output as a string"""
     if Path(file_path).suffix != ".py":
         return ""
-    cmd = "flake8 --isolated --select=F821,F822,F831,E111,E112,E113,E999,E902 {file_path}"
-    out = subprocess.run(
-        cmd.format(file_path=file_path), shell=True, check=False, capture_output=True
-    )
+    cmd = ["flake8", "--isolated", "--select=F821,F822,F831,E111,E112,E113,E999,E902", file_path]
+    try:
+        out = subprocess.run(cmd, check=False, capture_output=True)
+    except FileNotFoundError:  # flake8 is optional; skip linting when it isn't installed
+        return ""
     # Use errors="replace" so non-UTF-8 bytes (e.g. GBK-encoded paths on Windows) don't crash decoding.
     return out.stdout.decode("utf-8", errors="replace")
 

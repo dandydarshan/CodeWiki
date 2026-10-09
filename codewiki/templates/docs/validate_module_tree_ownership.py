@@ -360,7 +360,7 @@ def render_markdown(
                     + _format_id_list(ids, limit=8)
                 )
             lines.append(
-                f"- **Novel IDs (may stay if moved to a clean sub-module):** "
+                "- **Novel IDs (may stay if moved to a clean sub-module):** "
                 + _format_id_list(v["novel_component_ids"], limit=8)
             )
             links = ", ".join(f"`{link}`" for link in v["suggested_doc_links"])
@@ -423,7 +423,7 @@ def render_markdown(
                 f"({node['duplicate_count']} duplicate(s)).{mixed_note}"
             )
             lines.append(
-                f"  - Duplicate IDs re-document an earlier subtree; remove them from this node."
+                "  - Duplicate IDs re-document an earlier subtree; remove them from this node."
             )
             lines.append(
                 f"  - Novel IDs ({len(node['novel_component_ids'])}): "

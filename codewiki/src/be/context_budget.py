@@ -172,7 +172,9 @@ def fit_messages(messages: list, budget: int) -> list:
         return messages
 
     changed: set[int] = set()
-    note_tokens = _part_tokens(ToolReturnPart(tool_name="", content=ELIDED_TOOL_RESULT))
+    note_tokens = _part_tokens(
+        ToolReturnPart(tool_name="", content=ELIDED_TOOL_RESULT, tool_call_id="")
+    )
 
     # 1. Elide the oldest tool results first; the latest request (what the
     #    model is about to respond to) is left intact.

@@ -206,9 +206,7 @@ def incremental_by_top_level(tree: dict[str, Any]) -> list[dict[str, Any]]:
 
     for i, top in enumerate(top_names):
         earlier_tops = set(top_names[:i])
-        frozen_nodes = [
-            n for n in all_nodes if n[0] and n[0][0] in earlier_tops
-        ]
+        frozen_nodes = [n for n in all_nodes if n[0] and n[0][0] in earlier_tops]
         upcoming_nodes = [n for n in all_nodes if n[0] and n[0][0] == top]
 
         owner = build_first_owner_registry(frozen_nodes)
@@ -337,9 +335,11 @@ def render_markdown(
         lines.append(f"**{len(cross_violations)} module node(s) invalid:**")
         lines.append("")
         for v in cross_violations:
-            mixed = "yes — remove duplicates; keep or relocate novel IDs only" if v[
-                "mixed_with_novel_ids"
-            ] else "no — entire component list duplicates an earlier subtree"
+            mixed = (
+                "yes — remove duplicates; keep or relocate novel IDs only"
+                if v["mixed_with_novel_ids"]
+                else "no — entire component list duplicates an earlier subtree"
+            )
             scope = (
                 "cross-top-level (e.g. module_b vs module_a subtree)"
                 if v["cross_top_level"]
@@ -351,8 +351,7 @@ def render_markdown(
             lines.append(f"- **Scope:** {scope}")
             lines.append(f"- **Mixed bundle:** {mixed}")
             lines.append(
-                f"- **Duplicate IDs (already documented elsewhere):** "
-                f"{v['duplicate_count']}"
+                f"- **Duplicate IDs (already documented elsewhere):** {v['duplicate_count']}"
             )
             for owner_path, ids in v["overlap_by_owner_module"].items():
                 lines.append(
@@ -402,9 +401,7 @@ def render_markdown(
 
         for node in block["nodes"]:
             if node["component_count"] == 0:
-                lines.append(
-                    f"- **`{node['path']}`** — empty `components` (overview-only node)"
-                )
+                lines.append(f"- **`{node['path']}`** — empty `components` (overview-only node)")
                 continue
             if node["valid_as_owner"]:
                 lines.append(

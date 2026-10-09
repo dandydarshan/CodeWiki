@@ -59,6 +59,16 @@ jobs:
             diff_range="${PR_BASE_SHA}...${PR_HEAD_SHA}"
           else
             diff_range="${PUSH_BASE_SHA}..${GITHUB_SHA}"
+            # After a force-push the old head is no longer reachable, so the
+            # clone lacks it (it is all zeros for a new branch). Try fetching
+            # it; otherwise lint the files changed by the pushed head commit.
+            if ! git cat-file -e "${PUSH_BASE_SHA}^{commit}" 2>/dev/null; then
+              git fetch --quiet --depth=1 origin "$PUSH_BASE_SHA" 2>/dev/null || true
+            fi
+            if ! git cat-file -e "${PUSH_BASE_SHA}^{commit}" 2>/dev/null; then
+              echo "::warning::Push base ${PUSH_BASE_SHA} is not available; linting files changed by ${GITHUB_SHA} only."
+              diff_range="${GITHUB_SHA}~1..${GITHUB_SHA}"
+            fi
           fi
 
           git diff --name-only --diff-filter=ACMR -z "$diff_range" -- '*.py' \

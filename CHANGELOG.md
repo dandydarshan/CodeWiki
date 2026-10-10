@@ -6,8 +6,23 @@ uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [2.0.1] - 2026-10-10
+
+First release published to PyPI, as **`nc-codewiki`**
+(`pip install nc-codewiki` or `uv tool install nc-codewiki`). The command is
+still `codewiki`.
+
 ### Added
 
+- **Prebuilt, compiled wheels on PyPI** for Windows x86_64, Linux x86_64
+  (manylinux) and macOS (universal2: Apple Silicon and Intel), each for Python
+  3.12, 3.13 and 3.14.
+  Modules are compiled with Cython and the wheels ship without the Python
+  source. `.github/workflows/build-wheels.yml` builds and smoke-tests them on
+  every push to `main` and publishes them on `v*` tags.
+- **Installers** for Windows, Linux and macOS (`packaging/install/`). They
+  check git and Node.js/npm, then install with uv, or with pip if uv isn't
+  wanted.
 - **Rust analyzer.** Structs, unions, enums, traits, free functions, and
   impl/trait methods become components, with trait-impl, field-type,
   struct-literal, and call edges. `#[cfg(test)]` modules are skipped, and
@@ -24,6 +39,15 @@ uses [Semantic Versioning](https://semver.org/).
   `--update` keeps it, so existing flat docs stay flat. The GitHub Pages
   viewer, the web app and the MCP tools (`doc_path` in
   `processing_order.json`) follow the layout.
+- **caw is vendored** as `codewiki._vendor.caw`, from the
+  `fix/codex-exec-robustness` branch of the caw fork, because PyPI does not
+  accept git-URL dependencies. `coding-agent-wrapper` is no longer a
+  dependency, and `mcp` is capped below 2.0, which caw requires.
+
+### Fixed
+
+- Running flake8 from the editor tool no longer passes the file path through
+  a shell (Bandit B602).
 
 ## [2.0.0] - 2026-09-18
 
@@ -126,4 +150,5 @@ listed here.
   JavaScript, TypeScript, C, C++, C#), web application, Docker image,
   CodeWikiBench.
 
+[2.0.1]: https://github.com/dandydarshan/CodeWiki/releases/tag/v2.0.1
 [2.0.0]: https://github.com/FSoft-AI4Code/CodeWiki/releases/tag/v2.0.0

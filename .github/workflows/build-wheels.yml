@@ -1,0 +1,241 @@
+name: Build wheels
+
+# Builds the source-hidden (Cython-compiled) wheels with the scripts in
+# packaging/build/, so CI and local builds run the same steps.
+#
+# Pushes to main only build and smoke-test. Pushing a tag like v2.0.1 also
+# publishes the wheels to PyPI as nc-codewiki (wheels only, no sdist, so the
+# source is never uploaded). Bump `version` in pyproject.toml first: PyPI
+# accepts each version only once.
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-wheels-${{ github.ref }}
+  cancel-in-progress: true
+
+# Cython extensions are tied to one CPython ABI, so each Python version gets
+# its own wheel (cp312, cp313, cp314). Keep this list in sync with `build =`
+# in packaging/build/cibw.toml, which drives the Linux job.
+jobs:
+  windows:
+    name: Windows x86_64 / py${{ matrix.python }}
+    runs-on: windows-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.12", "3.13", "3.14"]
+    env:
+      PYVER: ${{ matrix.python }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+
+      # build_wheel.bat creates buildenv with the `py` launcher, which may not
+      # see the setup-python interpreter. Create it here; the script reuses it.
+      - name: Create build venv
+        shell: cmd
+        run: |
+          python -m venv buildenv
+          buildenv\Scripts\python -m pip install --upgrade pip
+          buildenv\Scripts\python -m pip install cython build wheel setuptools
+
+      - name: Build wheel
+        shell: cmd
+        run: packaging\build\build_wheel.bat
+
+      - name: Smoke-test wheel in a clean venv
+        shell: bash
+        run: |
+          python -m venv "$RUNNER_TEMP/smoke"
+          "$RUNNER_TEMP/smoke/Scripts/python" -m pip install dist/*.whl
+          cd "$RUNNER_TEMP"
+          "$RUNNER_TEMP/smoke/Scripts/python" -m codewiki --help
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: codewiki-wheel-windows-x86_64-py${{ matrix.python }}
+          path: dist/*.whl
+          if-no-files-found: error
+
+  linux:
+    name: Linux (manylinux x86_64)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      # cibuildwheel builds every version in `build =` of
+      # packaging/build/cibw.toml inside the manylinux container. These host
+      # interpreters are only for running cibuildwheel and the smoke tests.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: |
+            3.12
+            3.13
+            3.14
+
+      - name: Build wheels
+        env:
+          CIBW_CONTAINER_ENGINE: docker
+          WORK: ${{ runner.temp }}/codewiki-linux-build
+          CIBW_ENV: ${{ runner.temp }}/cibw-env
+        run: bash packaging/build/build_linux_wheel.sh
+
+      - name: Smoke-test each wheel in a clean venv
+        run: |
+          for v in 3.12 3.13 3.14; do
+            echo "::group::Python $v"
+            venv="$RUNNER_TEMP/smoke-$v"
+            "python$v" -m venv "$venv"
+            "$venv/bin/python" -m pip install dist-linux/*-cp${v/./}-*.whl
+            (cd "$RUNNER_TEMP" && "$venv/bin/python" -m codewiki --help)
+            echo "::endgroup::"
+          done
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: codewiki-wheel-linux-x86_64-all-py
+          path: dist-linux/*.whl
+          if-no-files-found: error
+
+  # setup-python's macOS interpreters are universal2 builds, so the compiler
+  # targets arm64 and x86_64 together and each wheel is universal2: one wheel
+  # per Python version covers Apple Silicon and Intel Macs. Built on the arm64
+  # runner, then installed and run on an Intel runner below.
+  macos:
+    name: macOS universal2 / py${{ matrix.python }}
+    runs-on: macos-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.12", "3.13", "3.14"]
+    env:
+      PYVER: ${{ matrix.python }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+
+      - name: Build wheel
+        run: bash packaging/build/build_mac_wheel.sh
+
+      - name: Check every compiled module has arm64 and x86_64 code
+        run: |
+          whl=$(ls wheelhouse/*.whl)
+          case "$whl" in
+            *universal2*) ;;
+            *) echo "::error::$whl is not tagged universal2"; exit 1 ;;
+          esac
+          dir=$(mktemp -d)
+          unzip -q "$whl" -d "$dir"
+          checked=0
+          bad=0
+          while IFS= read -r so; do
+            checked=$((checked + 1))
+            archs=" $(lipo -archs "$so") "
+            for arch in arm64 x86_64; do
+              case "$archs" in
+                *" $arch "*) ;;
+                *) echo "::error::${so#"$dir"/} lacks $arch (has:$archs)"; bad=1 ;;
+              esac
+            done
+          done < <(find "$dir" -name '*.so')
+          echo "Checked $checked compiled modules"
+          [ "$checked" -gt 0 ] && [ "$bad" = 0 ]
+
+      - name: Smoke-test wheel in a clean venv
+        run: |
+          python -m venv "$RUNNER_TEMP/smoke"
+          "$RUNNER_TEMP/smoke/bin/python" -m pip install wheelhouse/*.whl
+          cd "$RUNNER_TEMP"
+          "$RUNNER_TEMP/smoke/bin/python" -m codewiki --help
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: codewiki-wheel-macos-universal2-py${{ matrix.python }}
+          path: wheelhouse/*.whl
+          if-no-files-found: error
+
+  macos-intel:
+    name: macOS x86_64 smoke test / py${{ matrix.python }}
+    needs: macos
+    runs-on: macos-15-intel
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.12", "3.13", "3.14"]
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: codewiki-wheel-macos-universal2-py${{ matrix.python }}
+          path: wheelhouse
+
+      - name: Install and run the universal2 wheel on Intel
+        run: |
+          test "$(uname -m)" = x86_64
+          python -m venv "$RUNNER_TEMP/smoke"
+          "$RUNNER_TEMP/smoke/bin/python" -m pip install wheelhouse/*.whl
+          cd "$RUNNER_TEMP"
+          "$RUNNER_TEMP/smoke/bin/python" -m codewiki --help
+          "$RUNNER_TEMP/smoke/bin/python" -c "import codewiki.cli.main as m; assert m.__file__.endswith('.so'), m.__file__; print('compiled:', m.__file__)"
+
+  publish:
+    name: Publish to PyPI
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [windows, linux, macos, macos-intel]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # Trusted publishing: PyPI must list this repo, this workflow file and this
+    # environment as a publisher for nc-codewiki. No API token is stored.
+    environment:
+      name: pypi
+      url: https://pypi.org/project/nc-codewiki/
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check tag matches pyproject version
+        run: |
+          version=$(python3 -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")
+          if [ "${GITHUB_REF_NAME#v}" != "$version" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not match pyproject.toml version $version"
+            exit 1
+          fi
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: codewiki-wheel-*
+          path: dist
+          merge-multiple: true
+
+      # 3 Python versions x (Windows, Linux, macOS universal2).
+      - name: List wheels
+        run: |
+          ls -l dist
+          count=$(ls dist/*.whl | wc -l)
+          if [ "$count" -ne 9 ]; then
+            echo "::error::Expected 9 wheels, found $count"
+            exit 1
+          fi
+
+      - uses: pypa/gh-action-pypi-publish@release/v1

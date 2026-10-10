@@ -51,9 +51,12 @@ Codex subscription, or an AI IDE that speaks MCP.
 **1. Install**
 
 ```bash
-pip install git+https://github.com/FSoft-AI4Code/CodeWiki.git
+pip install nc-codewiki          # or: uv tool install nc-codewiki
 codewiki --version
 ```
+
+Prebuilt wheels are published for Windows x86_64, Linux x86_64 and macOS
+(universal2: Apple Silicon and Intel) on Python 3.12–3.14.
 
 Needs Python 3.12+, Git, and Node.js with npm at install time.
 

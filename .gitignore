@@ -10,6 +10,7 @@ __pycache__/
 *.so
 .Python
 build/
+!packaging/build/
 develop-eggs/
 dist/
 downloads/
@@ -90,3 +91,12 @@ Thumbs.db
 !tests/test_updater_change_report.py
 !tests/test_updater_write_guard.py
 !tests/test_updater_orchestrator.py
+
+# Compiled-wheel build outputs (packaging/build/*)
+buildenv/
+mac-buildenv/
+build_cython/
+_wheel/
+dist-linux/
+wheelhouse/
+*.pyd

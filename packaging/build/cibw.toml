@@ -1,0 +1,20 @@
+# cibuildwheel config for the Linux (manylinux) build.
+# Used by packaging/build/build_linux_wheel.sh.
+# One wheel per CPython version (Cython output is tied to the interpreter ABI).
+[tool.cibuildwheel]
+build = "cp312-manylinux_x86_64 cp313-manylinux_x86_64 cp314-manylinux_x86_64"
+build-frontend = "build"
+
+# Node.js/npm (mermaid-parser-py's npm step) and git (GitPython)
+# are needed inside the build container.
+before-all = "yum install -y nodejs npm git || (dnf install -y nodejs npm git)"
+
+build-verbosity = 1
+
+# setup.py only compiles with Cython when CODEWIKI_CYTHONIZE is set.
+# Python's own build flags on Linux include -g, which would ship debug info in
+# every compiled module (about 3x the wheel size, and it eases reverse
+# engineering). CFLAGS/LDFLAGS are appended after Python's flags, so -g0 wins;
+# --strip-all also drops the symbol table (the module's exported init
+# function stays in the dynamic symbol table).
+environment = { CODEWIKI_CYTHONIZE = "1", CFLAGS = "-g0", LDFLAGS = "-Wl,--strip-all" }

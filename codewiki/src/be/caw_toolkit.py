@@ -24,7 +24,7 @@ import os
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from caw import ToolKit, tool
+from codewiki._vendor.caw import ToolKit, tool
 from mcp.server.fastmcp import Context
 
 from codewiki.src.be.agent_tools.deps import CodeWikiDeps

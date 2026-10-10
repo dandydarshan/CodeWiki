@@ -26,8 +26,8 @@ import time
 import shutil
 from typing import Any
 
-from caw import Agent as CawAgent
-from caw import ToolGroup
+from codewiki._vendor.caw import Agent as CawAgent
+from codewiki._vendor.caw import ToolGroup
 
 from codewiki.src.be.agent_tools.deps import CodeWikiDeps
 from codewiki.src.be.backend import AgentReply, LLMBackend, usage_to_dict
@@ -101,7 +101,7 @@ def _patch_codex_tool_timeout() -> None:
     global _CODEX_PATCH_APPLIED
     if _CODEX_PATCH_APPLIED:
         return
-    from caw.providers.codex import CodexSession
+    from codewiki._vendor.caw.providers.codex import CodexSession
 
     _orig = CodexSession._mcp_config_args
 
@@ -183,7 +183,7 @@ def _patch_claude_allowed_tools() -> None:
         return
     import subprocess
 
-    from caw.providers import claude_code as _caw_claude
+    from codewiki._vendor.caw.providers import claude_code as _caw_claude
 
     class _SubprocessProxy:
         """``subprocess`` stand-in that rewrites Popen commands.

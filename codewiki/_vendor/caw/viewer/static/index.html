@@ -1,0 +1,847 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Trajectory Viewer</title>
+<style>
+/* ── Theme variables ─────────────────────────────────────────────── */
+[data-theme="dark"] {
+  --bg-primary: #1a1a2e;
+  --bg-secondary: #16213e;
+  --bg-tertiary: #0f3460;
+  --bg-hover: #1a2744;
+  --text-primary: #eee;
+  --text-secondary: #aaa;
+  --text-tertiary: #888;
+  --text-muted: #666;
+  --text-placeholder: #555;
+  --border-color: #0f3460;
+  --accent-red: #e94560;
+  --accent-green: #4ecca3;
+  --accent-blue: #4a90d9;
+  --bg-input: #0f3460;
+  --bg-disabled: #444;
+  --text-on-dark: #1a1a2e;
+  --text-ddd: #ddd;
+}
+[data-theme="light"] {
+  --bg-primary: #f5f5f5;
+  --bg-secondary: #ffffff;
+  --bg-tertiary: #e8edf2;
+  --bg-hover: #eef2f7;
+  --text-primary: #1a1a2e;
+  --text-secondary: #555;
+  --text-tertiary: #777;
+  --text-muted: #999;
+  --text-placeholder: #aaa;
+  --border-color: #d0d7de;
+  --accent-red: #d63851;
+  --accent-green: #2da67e;
+  --accent-blue: #3a7bc8;
+  --bg-input: #e8edf2;
+  --bg-disabled: #ccc;
+  --text-on-dark: #1a1a2e;
+  --text-ddd: #333;
+}
+
+/* ── Reset ───────────────────────────────────────────────────────── */
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  min-height: 100vh;
+}
+
+/* ── Theme toggle ────────────────────────────────────────────────── */
+.theme-toggle {
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-color);
+  color: var(--text-tertiary);
+  width: 28px; height: 28px;
+  border-radius: 4px;
+  cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 14px;
+  transition: all 0.2s;
+  flex-shrink: 0;
+}
+.theme-toggle:hover {
+  background: var(--bg-hover);
+  color: var(--accent-red);
+  border-color: var(--accent-red);
+}
+
+/* ── Trajectory Viewer ───────────────────────────────────────────── */
+.tj-page {
+  max-width: 1140px;
+  margin: 0 auto;
+  padding: 24px;
+  min-height: 100vh;
+}
+.tj-header-bar {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin-bottom: 20px;
+}
+.tj-title {
+  font-size: 22px;
+  flex: 1;
+}
+.tj-path-form {
+  display: flex;
+  gap: 10px;
+  margin-bottom: 16px;
+}
+.tj-path-input {
+  flex: 1;
+  padding: 10px 14px;
+  border-radius: 8px;
+  border: 1px solid var(--border-color);
+  background: var(--bg-input);
+  color: var(--text-primary);
+  font-family: 'JetBrains Mono', 'SFMono-Regular', monospace;
+  font-size: 14px;
+}
+.tj-path-input::placeholder { color: var(--text-placeholder); }
+.tj-load-btn {
+  padding: 10px 24px;
+  border-radius: 8px;
+  border: 1px solid var(--accent-blue);
+  background: var(--accent-blue);
+  color: #fff;
+  cursor: pointer;
+  font-weight: 600;
+  font-size: 14px;
+  white-space: nowrap;
+}
+.tj-load-btn:hover { opacity: 0.9; }
+.tj-load-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.tj-error {
+  background: var(--accent-red);
+  color: #fff;
+  padding: 12px 16px;
+  border-radius: 8px;
+  margin-bottom: 16px;
+  font-size: 14px;
+}
+.tj-source-display {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  padding: 10px 16px;
+  margin-bottom: 20px;
+  font-size: 13px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  overflow-x: auto;
+}
+.tj-source-label {
+  color: var(--text-muted);
+  font-weight: 600;
+  text-transform: uppercase;
+  font-size: 11px;
+  letter-spacing: .05em;
+  white-space: nowrap;
+}
+.tj-source-display code {
+  font-family: 'JetBrains Mono', 'SFMono-Regular', monospace;
+  color: var(--text-secondary);
+  word-break: break-all;
+}
+.tj-conversation-layout {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+}
+.tj-conversation-card {
+  flex: 1;
+  min-width: 0;
+}
+.tj-sidebar {
+  position: sticky;
+  top: 16px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  height: calc(100vh - 32px);
+}
+.tj-collapse-tools-btn {
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  color: var(--text-tertiary);
+  font-size: 11px;
+  padding: 5px 6px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.tj-collapse-tools-btn:hover {
+  color: var(--accent-blue);
+  border-color: var(--accent-blue);
+}
+.tj-minimap {
+  width: 18px;
+  flex-shrink: 0;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.tj-minimap-block {
+  width: 18px;
+  flex: 1;
+  min-height: 0;
+  border-radius: 2px;
+  cursor: pointer;
+  opacity: 0.5;
+  transition: opacity 0.15s, transform 0.15s;
+  border-bottom: 1px solid var(--bg-primary);
+}
+.tj-minimap-block:hover { opacity: 0.85; transform: scaleX(1.4); }
+.tj-minimap-block.active { opacity: 1; transform: scaleX(1.6); }
+.tj-card {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  padding: 24px;
+  margin-bottom: 24px;
+}
+.tj-card h2 {
+  margin-bottom: 16px;
+  font-size: 17px;
+  color: var(--text-primary);
+}
+.tj-metadata-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 12px;
+}
+.tj-metadata-item {
+  background: var(--bg-tertiary);
+  border-radius: 8px;
+  padding: 10px 14px;
+}
+.tj-metadata-label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: .05em;
+  color: var(--text-muted);
+  margin-bottom: 2px;
+}
+.tj-metadata-value {
+  font-weight: 600;
+  font-size: 14px;
+  color: var(--text-primary);
+  word-break: break-all;
+}
+.tj-tool-stat {
+  display: flex;
+  justify-content: space-between;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--border-color);
+  font-size: 14px;
+}
+.tj-tool-name { font-weight: 500; color: var(--text-primary); }
+.tj-tool-count { font-family: monospace; color: var(--text-secondary); }
+.tj-muted { color: var(--text-muted); font-size: 14px; }
+.tj-message {
+  border-left: 4px solid var(--border-color);
+  padding: 12px 16px;
+  margin-bottom: 10px;
+  background: var(--bg-primary);
+  border-radius: 8px;
+}
+.tj-message.tj-role-system { border-left-color: var(--text-muted); }
+.tj-message.tj-role-user { border-left-color: var(--accent-blue); }
+.tj-message.tj-role-assistant { border-left-color: var(--accent-green); }
+.tj-message.tj-role-tool { border-left-color: #e67e22; }
+.tj-message-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 6px;
+  user-select: none;
+  cursor: pointer;
+}
+.tj-message-role {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: .05em;
+  color: var(--text-muted);
+  font-weight: 700;
+}
+.tj-message-index { font-size: 11px; color: var(--text-muted); }
+.tj-message-model {
+  font-size: 11px;
+  color: var(--text-tertiary);
+  font-family: monospace;
+}
+.tj-collapse-icon {
+  font-size: 10px;
+  color: var(--text-muted);
+  margin-left: auto;
+}
+.tj-message-content {
+  font-size: 14px;
+  line-height: 1.55;
+  color: var(--text-primary);
+}
+.tj-text { margin: 4px 0; }
+.tj-code {
+  font-family: 'JetBrains Mono', 'SFMono-Regular', monospace;
+  background: var(--bg-tertiary);
+  border-radius: 6px;
+  padding: 10px 12px;
+  display: block;
+  white-space: pre-wrap;
+  word-break: break-all;
+  margin: 6px 0;
+  font-size: 12px;
+  color: var(--text-secondary);
+  max-height: 400px;
+  overflow-y: auto;
+}
+.tj-tool-bundle {
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  margin: 8px 0;
+  padding: 10px 12px;
+  background: var(--bg-secondary);
+}
+.tj-tool-call-name {
+  font-weight: 600;
+  color: var(--accent-blue);
+  font-size: 13px;
+  margin-bottom: 4px;
+}
+.tj-tool-result {
+  margin-top: 8px;
+  border-top: 1px solid var(--border-color);
+  padding-top: 8px;
+}
+.tj-tool-result.error .tj-tool-call-name { color: var(--accent-red); }
+.tj-subagent {
+  margin-top: 8px;
+  background: var(--bg-secondary);
+  border-radius: 8px;
+  border: 1px solid var(--border-color);
+  padding: 10px 12px;
+}
+.tj-subagent h5 { margin: 0 0 6px 0; font-size: 13px; color: var(--text-muted); }
+.tj-subagent-meta { font-size: 12px; color: var(--text-tertiary); margin-bottom: 4px; }
+.tj-subagent-line { font-size: 13px; margin-bottom: 4px; }
+.tj-expand-btn {
+  background: none;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  color: var(--text-tertiary);
+  font-size: 12px;
+  padding: 2px 10px;
+  cursor: pointer;
+  margin-top: 4px;
+}
+.tj-expand-btn:hover { color: var(--accent-blue); border-color: var(--accent-blue); }
+.tj-role { font-weight: 600; margin-right: 6px; color: var(--accent-blue); }
+
+/* ── Thinking block ──────────────────────────────────────────────── */
+.tj-thinking {
+  border-left: 3px solid #a855f7;
+  padding-left: 10px;
+  margin: 6px 0;
+  opacity: 0.85;
+}
+.tj-thinking-label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: .05em;
+  color: #a855f7;
+  font-weight: 600;
+  margin-bottom: 2px;
+}
+
+</style>
+</head>
+<body>
+
+<div class="tj-page" id="app">
+  <div class="tj-header-bar">
+    <h1 class="tj-title">Trajectory Viewer</h1>
+    <button class="theme-toggle" id="theme-toggle-btn"></button>
+  </div>
+
+  <form class="tj-path-form" id="path-form">
+    <input type="text" class="tj-path-input" id="path-input"
+           placeholder="/path/to/trajectory.json" spellcheck="false">
+    <button type="submit" class="tj-load-btn" id="load-btn">Load</button>
+  </form>
+
+  <div class="tj-error" id="error-display" style="display:none"></div>
+  <div id="content"></div>
+</div>
+
+<script>
+/* ──────────────────────────────────────────────────────────────────
+   State
+   ────────────────────────────────────────────────────────────────── */
+const state = {
+  trajPath: new URLSearchParams(location.search).get('local') || '',
+  data: null,
+  loading: false,
+  error: null,
+  toolsCollapsed: false,
+  theme: localStorage.getItem('theme') || 'light',
+};
+
+const ROLE_COLORS = {
+  system: '#636e72',
+  user:   '#4a90d9',
+  assistant: '#4ecca3',
+  tool:   '#e67e22',
+};
+const COLLAPSED_LINES = 5;
+let minimapObserver = null;
+
+/* ──────────────────────────────────────────────────────────────────
+   Helpers
+   ────────────────────────────────────────────────────────────────── */
+function esc(t) {
+  return String(t)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#x27;');
+}
+
+function fmtDuration(ms) {
+  if (!ms) return '0s';
+  if (ms < 1000) return ms + 'ms';
+  const s = ms / 1000;
+  if (s < 60) return s.toFixed(1) + 's';
+  const m = Math.floor(s / 60);
+  return m + 'm ' + Math.round(s % 60) + 's';
+}
+
+function fmtCost(usd) {
+  if (usd == null) return '';
+  return '$' + usd.toFixed(4);
+}
+
+function fmtTokens(n) {
+  if (n == null) return '';
+  if (n >= 1000000) return (n / 1000000).toFixed(1) + 'M';
+  if (n >= 1000) return (n / 1000).toFixed(1) + 'K';
+  return String(n);
+}
+
+function fmtTime(iso) {
+  if (!iso) return '';
+  try {
+    const d = new Date(iso);
+    return d.toLocaleString();
+  } catch { return iso; }
+}
+
+/* ──────────────────────────────────────────────────────────────────
+   Data transformation: caw trajectory → viewer model
+   ────────────────────────────────────────────────────────────────── */
+function buildViewData(raw) {
+  const usage = raw.total_usage || raw.usage || {};
+
+  // Metadata
+  const meta = {};
+  if (raw.agent) meta.agent = raw.agent;
+  if (raw.model) meta.model = raw.model;
+  if (raw.session_id) meta.session_id = raw.session_id;
+  if (raw.created_at) meta.created_at = raw.created_at;
+  if (raw.reasoning) meta.reasoning = raw.reasoning;
+  meta.num_turns = (raw.turns || []).length;
+  if (raw.duration_ms) meta.duration = fmtDuration(raw.duration_ms);
+  if (usage.input_tokens)  meta.input_tokens  = fmtTokens(usage.input_tokens);
+  if (usage.output_tokens) meta.output_tokens = fmtTokens(usage.output_tokens);
+  if (usage.cache_read_tokens)  meta.cache_read_tokens  = fmtTokens(usage.cache_read_tokens);
+  if (usage.cache_write_tokens) meta.cache_write_tokens = fmtTokens(usage.cache_write_tokens);
+  if (usage.cost_usd) meta.cost = fmtCost(usage.cost_usd);
+
+  // Custom metadata
+  for (const [k, v] of Object.entries(raw.metadata || {})) {
+    meta[k] = typeof v === 'object' ? JSON.stringify(v) : String(v);
+  }
+
+  // Tool usage counts
+  const toolUsage = {};
+  function countTools(blocks) {
+    for (const b of (blocks || [])) {
+      if (b.type === 'tool_use') {
+        toolUsage[b.name] = (toolUsage[b.name] || 0) + 1;
+        if (b.subagent_trajectory) {
+          for (const t of (b.subagent_trajectory.turns || []))
+            countTools(t.output);
+        }
+      }
+    }
+  }
+  for (const turn of (raw.turns || [])) countTools(turn.output);
+
+  // Messages list — split each turn's output into separate messages
+  // when block types alternate between text/thinking and tool_use.
+  const messages = [];
+  if (raw.system_prompt) {
+    messages.push({ role: 'system', content: [{ type: 'text', text: raw.system_prompt }] });
+  }
+  for (const turn of (raw.turns || [])) {
+    messages.push({ role: 'user', content: [{ type: 'text', text: turn.input }] });
+    const output = turn.output || [];
+
+    // Group consecutive blocks: text/thinking together, tool_use together
+    const groups = [];
+    for (const block of output) {
+      const isTool = block.type === 'tool_use';
+      if (groups.length === 0 || groups[groups.length - 1].isTool !== isTool) {
+        groups.push({ isTool, blocks: [block] });
+      } else {
+        groups[groups.length - 1].blocks.push(block);
+      }
+    }
+
+    // First group gets usage/duration metadata
+    for (let gi = 0; gi < groups.length; gi++) {
+      const g = groups[gi];
+      messages.push({
+        role: g.isTool ? 'tool' : 'assistant',
+        model: raw.model,
+        content: g.blocks,
+        ...(gi === 0 ? { usage: turn.usage, duration_ms: turn.duration_ms } : {}),
+      });
+    }
+  }
+  return { metadata: meta, tool_usage: toolUsage, messages };
+}
+
+/* ──────────────────────────────────────────────────────────────────
+   Rendering helpers
+   ────────────────────────────────────────────────────────────────── */
+function renderMetadataGrid(meta) {
+  const priorityKeys = ['agent', 'model', 'session_id', 'created_at'];
+  const ordered = [
+    ...priorityKeys.filter(k => k in meta),
+    ...Object.keys(meta).filter(k => !priorityKeys.includes(k)),
+  ];
+  return '<div class="tj-metadata-grid">' +
+    ordered.map(k =>
+      '<div class="tj-metadata-item">' +
+        '<div class="tj-metadata-label">' + esc(k.replace(/_/g, ' ')) + '</div>' +
+        '<div class="tj-metadata-value">' + esc(meta[k]) + '</div>' +
+      '</div>'
+    ).join('') +
+  '</div>';
+}
+
+function renderToolUsage(usage) {
+  const entries = Object.entries(usage).sort(([,a],[,b]) => b - a);
+  if (!entries.length) return '<p class="tj-muted">No tool usage recorded.</p>';
+  return entries.map(([name, count]) =>
+    '<div class="tj-tool-stat">' +
+      '<span class="tj-tool-name">' + esc(name) + '</span>' +
+      '<span class="tj-tool-count">' + count + '</span>' +
+    '</div>'
+  ).join('');
+}
+
+function renderCollapsiblePre(text) {
+  if (!text) return '';
+  const lines = text.split('\n');
+  if (lines.length > COLLAPSED_LINES) {
+    return '<div class="tj-collapsible">' +
+      '<pre class="tj-code tj-code-short">' + esc(lines.slice(0, COLLAPSED_LINES).join('\n')) + '</pre>' +
+      '<pre class="tj-code tj-code-full" style="display:none">' + esc(text) + '</pre>' +
+      '<button class="tj-expand-btn" onclick="togglePre(this)">Show all ' + lines.length + ' lines</button>' +
+    '</div>';
+  }
+  return '<pre class="tj-code">' + esc(text) + '</pre>';
+}
+
+function renderTextBlock(text) {
+  if (!text) return '';
+  const lines = text.split('\n');
+  if (lines.length > COLLAPSED_LINES) return renderCollapsiblePre(text);
+  return '<p class="tj-text">' + esc(text).replace(/\n/g, '<br>') + '</p>';
+}
+
+function renderContentBlock(block) {
+  if (block.type === 'text') return renderTextBlock(block.text || '');
+
+  if (block.type === 'thinking') {
+    return '<div class="tj-thinking">' +
+      '<div class="tj-thinking-label">Thinking</div>' +
+      renderCollapsiblePre(block.text || '') +
+    '</div>';
+  }
+
+  if (block.type === 'tool_use') {
+    const args = block.arguments && Object.keys(block.arguments).length > 0
+      ? JSON.stringify(block.arguments, null, 2) : 'no arguments';
+    let resultHtml = '';
+    if (block.output != null && block.output !== '') {
+      const isErr = !!block.is_error;
+      const out = typeof block.output === 'string' ? block.output : JSON.stringify(block.output, null, 2);
+      resultHtml = '<div class="tj-tool-result' + (isErr ? ' error' : '') + '">' +
+        '<div class="tj-tool-call-name">' + (isErr ? '&#10060; Error' : '&#9989; Result') + '</div>' +
+        renderCollapsiblePre(out) +
+      '</div>';
+    }
+    let subHtml = '';
+    if (block.subagent_trajectory) {
+      subHtml = renderSubagentTrajectory(block.subagent_trajectory);
+    }
+    return '<div class="tj-tool-bundle">' +
+      '<div class="tj-tool-call-name">&#128295; ' + esc(block.name) + '</div>' +
+      renderCollapsiblePre(args) +
+      resultHtml + subHtml +
+    '</div>';
+  }
+
+  // Unknown block type
+  return '<div class="tj-muted">' + esc(JSON.stringify(block)) + '</div>';
+}
+
+function renderSubagentTrajectory(traj) {
+  const turns = traj.turns || [];
+  const agent = traj.agent || '';
+  const model = traj.model || '';
+  let linesHtml = '';
+  for (const turn of turns) {
+    const inputPreview = (turn.input || '').slice(0, 200);
+    linesHtml += '<div class="tj-subagent-line"><span class="tj-role">user</span>' + esc(inputPreview) + (turn.input.length > 200 ? '...' : '') + '</div>';
+    for (const block of (turn.output || [])) {
+      if (block.type === 'text') {
+        const preview = (block.text || '').slice(0, 200);
+        linesHtml += '<div class="tj-subagent-line"><span class="tj-role">assistant</span>' + esc(preview) + (block.text.length > 200 ? '...' : '') + '</div>';
+      } else if (block.type === 'tool_use') {
+        linesHtml += '<div class="tj-subagent-line"><span class="tj-role">tool</span>&#128295; ' + esc(block.name) + '</div>';
+      }
+    }
+  }
+  const label = 'Subagent' + (agent ? ' (' + esc(agent) + ')' : '') + (model ? ' &mdash; ' + esc(model) : '');
+  return '<div class="tj-subagent">' +
+    '<h5>' + label + '</h5>' +
+    '<div class="tj-subagent-meta"><strong>Turns:</strong> ' + turns.length + '</div>' +
+    linesHtml +
+  '</div>';
+}
+
+function renderMessage(msg, index, total) {
+  const role = msg.role;
+  const startCollapsed = role === 'system';
+  const displayNone = startCollapsed ? ' style="display:none"' : '';
+  const icon = startCollapsed ? '&#9654;' : '&#9660;';
+
+  let headerExtra = '';
+  if (msg.model) headerExtra += '<span class="tj-message-model">' + esc(msg.model) + '</span>';
+
+  const blocks = (msg.content || []).map(b => renderContentBlock(b)).join('');
+
+  return '<div id="tj-msg-' + index + '" class="tj-message tj-role-' + esc(role) + '">' +
+    '<div class="tj-message-header" onclick="toggleMsg(' + index + ')">' +
+      '<span class="tj-message-role">' + esc(role) + '</span>' +
+      '<span class="tj-message-index">#' + (index + 1) + '</span>' +
+      headerExtra +
+      '<span class="tj-collapse-icon" id="tj-msg-icon-' + index + '">' + icon + '</span>' +
+    '</div>' +
+    '<div class="tj-message-content" id="tj-msg-content-' + index + '"' + displayNone + '>' +
+      blocks +
+    '</div>' +
+  '</div>';
+}
+
+function renderMinimap(messages) {
+  return messages.map((msg, i) => {
+    const color = ROLE_COLORS[msg.role] || '#636e72';
+    return '<div class="tj-minimap-block" style="background-color:' + color + '" ' +
+      'title="#' + (i + 1) + ' ' + esc(msg.role) + '" ' +
+      'onclick="scrollToMsg(' + i + ')"></div>';
+  }).join('');
+}
+
+/* ──────────────────────────────────────────────────────────────────
+   Main render
+   ────────────────────────────────────────────────────────────────── */
+function render() {
+  const content = document.getElementById('content');
+  if (!state.data) { content.innerHTML = ''; return; }
+
+  const vd = buildViewData(state.data);
+
+  content.innerHTML =
+    '<div class="tj-source-display">' +
+      '<span class="tj-source-label">Source:</span>' +
+      '<code>' + esc(state.trajPath) + '</code>' +
+    '</div>' +
+
+    '<div class="tj-card"><h2>Metadata</h2>' + renderMetadataGrid(vd.metadata) + '</div>' +
+    '<div class="tj-card"><h2>Tool Usage</h2>' + renderToolUsage(vd.tool_usage) + '</div>' +
+
+    '<div class="tj-conversation-layout">' +
+      '<div class="tj-card tj-conversation-card">' +
+        '<h2>Conversation (' + vd.messages.length + ' messages)</h2>' +
+        vd.messages.map((m, i) => renderMessage(m, i, vd.messages.length)).join('') +
+      '</div>' +
+      '<div class="tj-sidebar">' +
+        '<button class="tj-collapse-tools-btn" id="tools-toggle-btn" onclick="toggleToolsCollapsed()">' +
+          (state.toolsCollapsed ? 'Show Tools' : 'Hide Tools') +
+        '</button>' +
+        '<div class="tj-minimap">' + renderMinimap(vd.messages) + '</div>' +
+      '</div>' +
+    '</div>';
+
+  setupMinimapObserver();
+}
+
+/* ──────────────────────────────────────────────────────────────────
+   Interaction handlers
+   ────────────────────────────────────────────────────────────────── */
+function toggleMsg(index) {
+  const c = document.getElementById('tj-msg-content-' + index);
+  const icon = document.getElementById('tj-msg-icon-' + index);
+  if (!c) return;
+  if (c.style.display === 'none') {
+    c.style.display = '';
+    icon.innerHTML = '&#9660;';
+  } else {
+    c.style.display = 'none';
+    icon.innerHTML = '&#9654;';
+  }
+}
+
+function togglePre(btn) {
+  const container = btn.closest('.tj-collapsible');
+  const short = container.querySelector('.tj-code-short');
+  const full = container.querySelector('.tj-code-full');
+  if (full.style.display === 'none') {
+    short.style.display = 'none';
+    full.style.display = '';
+    btn.textContent = 'Collapse';
+  } else {
+    short.style.display = '';
+    full.style.display = 'none';
+    const totalLines = full.textContent.split('\n').length;
+    btn.textContent = 'Show all ' + totalLines + ' lines';
+  }
+}
+
+function toggleToolsCollapsed() {
+  state.toolsCollapsed = !state.toolsCollapsed;
+  document.getElementById('tools-toggle-btn').textContent =
+    state.toolsCollapsed ? 'Show Tools' : 'Hide Tools';
+  document.querySelectorAll('.tj-message.tj-role-tool').forEach(el => {
+    const idx = el.id.replace('tj-msg-', '');
+    const c = document.getElementById('tj-msg-content-' + idx);
+    const icon = document.getElementById('tj-msg-icon-' + idx);
+    if (c) {
+      c.style.display = state.toolsCollapsed ? 'none' : '';
+      icon.innerHTML = state.toolsCollapsed ? '&#9654;' : '&#9660;';
+    }
+  });
+}
+
+function scrollToMsg(i) {
+  const el = document.getElementById('tj-msg-' + i);
+  if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+function setupMinimapObserver() {
+  if (minimapObserver) minimapObserver.disconnect();
+  const msgEls = document.querySelectorAll('[id^="tj-msg-"]');
+  if (!msgEls.length) return;
+  minimapObserver = new IntersectionObserver(entries => {
+    for (const entry of entries) {
+      if (entry.isIntersecting) {
+        const idx = parseInt(entry.target.id.replace('tj-msg-', ''), 10);
+        if (!isNaN(idx)) {
+          document.querySelectorAll('.tj-minimap-block').forEach((b, i) => {
+            b.classList.toggle('active', i === idx);
+          });
+        }
+      }
+    }
+  }, { rootMargin: '-20% 0px -70% 0px' });
+  msgEls.forEach(el => { if (el.id.match(/^tj-msg-\d+$/)) minimapObserver.observe(el); });
+}
+
+/* ──────────────────────────────────────────────────────────────────
+   API calls
+   ────────────────────────────────────────────────────────────────── */
+function loadTrajectory(path) {
+  if (!path.trim()) return;
+  state.loading = true;
+  state.error = null;
+  document.getElementById('load-btn').disabled = true;
+  document.getElementById('load-btn').textContent = 'Loading\u2026';
+  document.getElementById('error-display').style.display = 'none';
+
+  const url = new URL(location.href);
+  url.searchParams.set('local', path);
+  history.replaceState({}, '', url.toString());
+
+  fetch('/api/trajectory?path=' + encodeURIComponent(path))
+    .then(res => {
+      if (!res.ok) return res.json().then(d => { throw new Error(d.detail || 'HTTP ' + res.status); });
+      return res.json();
+    })
+    .then(data => {
+      state.data = data;
+      state.trajPath = path;
+      state.toolsCollapsed = false;
+      render();
+    })
+    .catch(err => {
+      state.data = null;
+      state.error = err.message || 'Failed to load trajectory';
+      document.getElementById('error-display').textContent = state.error;
+      document.getElementById('error-display').style.display = '';
+      document.getElementById('content').innerHTML = '';
+    })
+    .finally(() => {
+      state.loading = false;
+      document.getElementById('load-btn').disabled = false;
+      document.getElementById('load-btn').textContent = 'Load';
+    });
+}
+
+/* ──────────────────────────────────────────────────────────────────
+   Init
+   ────────────────────────────────────────────────────────────────── */
+(function init() {
+  // Theme
+  function applyTheme() {
+    document.documentElement.setAttribute('data-theme', state.theme);
+    localStorage.setItem('theme', state.theme);
+    document.getElementById('theme-toggle-btn').textContent =
+      state.theme === 'dark' ? '\u2600\uFE0F' : '\uD83C\uDF19';
+  }
+  applyTheme();
+  document.getElementById('theme-toggle-btn').addEventListener('click', () => {
+    state.theme = state.theme === 'dark' ? 'light' : 'dark';
+    applyTheme();
+  });
+
+  // Path form
+  const pathInput = document.getElementById('path-input');
+  pathInput.value = state.trajPath;
+  document.getElementById('path-form').addEventListener('submit', e => {
+    e.preventDefault();
+    loadTrajectory(pathInput.value);
+  });
+
+  // Auto-load from URL
+  if (state.trajPath) loadTrajectory(state.trajPath);
+})();
+</script>
+</body>
+</html>

@@ -12,13 +12,12 @@ import tiktoken
 logger = logging.getLogger(__name__)
 
 
-# PythonMonkey (used by mermaid_parser.parse_mermaid_py) binds its JS engine
-# to the thread that first imported it — typically the main thread at module
-# load time. The caw backend dispatches MCP tool calls on a FastMCP
-# daemon-thread event loop, where parse_mermaid_py raises
-# "cannot find a running Python event-loop". Recording the main loop here
-# lets validate_single_diagram marshal the call back via
-# asyncio.run_coroutine_threadsafe so PythonMonkey finds its home loop.
+# PythonMonkey (used by mermaid_parser.parse_mermaid_py) is only safe on the
+# process main thread. Importing it on another thread segfaults, and using it
+# from a non-main thread's loop crashes Python at exit (seen on every version,
+# Linux and macOS). The caw backend runs MCP tool calls on a FastMCP daemon
+# thread, so it records the main loop here and _try_pythonmonkey_parse hands
+# the parse (import included) back to it via asyncio.run_coroutine_threadsafe.
 _main_loop: "asyncio.AbstractEventLoop | None" = None
 _main_loop_thread_ident: int | None = None
 
@@ -152,11 +151,9 @@ def extract_mermaid_blocks(content: str) -> List[Tuple[int, str]]:
     return mermaid_blocks
 
 
-# PythonMonkey 1.3.1 only supports Python 3.8–3.11. On 3.12+ it still imports,
-# but its SpiderMonkey cleanup runs on the wrong thread during _Py_Finalize and
-# segfaults at interpreter shutdown (macOS crash dialog after a successful run).
-# Skip it proactively so SpiderMonkey is never loaded into the process.
-_PYTHONMONKEY_BROKEN = sys.version_info >= (3, 12)
+# Set once PythonMonkey fails to import or loses its event loop; validation
+# then falls back to mermaid-py.
+_PYTHONMONKEY_BROKEN = False
 
 # mermaid-py validates diagrams by sending them to a remote rendering service
 # (https://mermaid.ink by default, overridable via the MERMAID_INK_SERVER env
@@ -201,36 +198,41 @@ async def _try_pythonmonkey_parse(diagram_content: str) -> str | None:
     """Attempt to parse via PythonMonkey/mermaid-parser-py.
 
     Returns the extracted parse-error message, "" on success, or None when
-    PythonMonkey itself is unusable (broken JS event loop binding on
-    Python 3.13+) so the caller can fall back to mermaid-py.
+    PythonMonkey itself is unusable (failed import or lost event loop) so the
+    caller can fall back to mermaid-py.
     """
     global _PYTHONMONKEY_BROKEN
     if _PYTHONMONKEY_BROKEN:
         return None
 
-    try:
-        from mermaid_parser.parser import parse_mermaid_py
-    except Exception:
-        _PYTHONMONKEY_BROKEN = True
+    on_main_thread = threading.current_thread() is threading.main_thread()
+    via_main_loop = (
+        not on_main_thread
+        and _main_loop is not None
+        and _main_loop.is_running()
+        and _main_loop_thread_ident == threading.main_thread().ident
+    )
+    if not (on_main_thread or via_main_loop):
+        # e.g. the web app's worker thread: no main-thread loop to hand off to.
         return None
 
     _quiet_stderr_enter()
     try:
-        if (
-            _main_loop is not None
-            and _main_loop.is_running()
-            and threading.get_ident() != _main_loop_thread_ident
-        ):
-            fut = asyncio.run_coroutine_threadsafe(parse_mermaid_py(diagram_content), _main_loop)
+        if via_main_loop:
+            fut = asyncio.run_coroutine_threadsafe(
+                _parse_with_pythonmonkey(diagram_content), _main_loop
+            )
             await asyncio.wrap_future(fut)
         else:
-            await parse_mermaid_py(diagram_content)
+            await _parse_with_pythonmonkey(diagram_content)
         return ""
+    except ImportError:
+        _PYTHONMONKEY_BROKEN = True
+        return None
     except Exception as e:
         error_str = str(e)
-        # PythonMonkey 1.3.1 only supports Python 3.8-3.11; on newer Pythons
-        # every JS call raises this. Latch the failure once so subsequent
-        # diagrams skip the broken path and go straight to mermaid-py.
+        # Raised when called off PythonMonkey's home loop. Latch the failure
+        # once so later diagrams skip straight to mermaid-py.
         if "cannot find a running Python event-loop" in error_str:
             _PYTHONMONKEY_BROKEN = True
             return None
@@ -241,6 +243,15 @@ async def _try_pythonmonkey_parse(diagram_content: str) -> str | None:
         return None
     finally:
         _quiet_stderr_exit()
+
+
+async def _parse_with_pythonmonkey(diagram_content: str) -> None:
+    """Parse on the main thread; importing here keeps the import there too."""
+    try:
+        from mermaid_parser.parser import parse_mermaid_py
+    except Exception as e:
+        raise ImportError("PythonMonkey is unavailable") from e
+    await parse_mermaid_py(diagram_content)
 
 
 def _parse_via_mermaid_py(diagram_content: str) -> str:

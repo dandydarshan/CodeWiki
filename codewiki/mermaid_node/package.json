@@ -1,0 +1,8 @@
+{
+    "name": "codewiki-mermaid-validator",
+    "private": true,
+    "type": "module",
+    "dependencies": {
+        "mermaid": "^11.6.0"
+    }
+}

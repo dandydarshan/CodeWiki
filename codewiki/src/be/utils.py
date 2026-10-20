@@ -250,8 +250,6 @@ async def _try_pythonmonkey_parse(diagram_content: str) -> str | None:
         _warn_pythonmonkey_unavailable_once()
         return None
 
-    import os
-
     on_main_thread = threading.current_thread() is threading.main_thread()
     via_main_loop = (
         not on_main_thread

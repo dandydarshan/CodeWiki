@@ -156,7 +156,7 @@ def extract_mermaid_blocks(content: str) -> List[Tuple[int, str]]:
 
 # Set once PythonMonkey fails to import or loses its event loop; validation
 # then falls back to the Node script, then mermaid-py.
-_PYTHONMONKEY_BROKEN = False
+_PYTHONMONKEY_BROKEN = True
 
 # Local Node validator: subprocess to codewiki/mermaid_node/validate.mjs.
 # Runs when PythonMonkey returns None (unavailable), not on PM syntax errors.
@@ -291,116 +291,6 @@ async def _try_pythonmonkey_parse(diagram_content: str) -> str | None:
         return None
     finally:
         _quiet_stderr_exit()
-
-
-async def _parse_with_pythonmonkey(diagram_content: str) -> None:
-    """Parse on the main thread; importing here keeps the import there too."""
-    try:
-        from mermaid_parser.parser import parse_mermaid_py
-    except Exception as e:
-        raise ImportError("PythonMonkey is unavailable") from e
-    await parse_mermaid_py(diagram_content)
-
-
-def _mermaid_node_dir() -> Path:
-    import codewiki
-
-    return Path(codewiki.__file__).resolve().parent / "mermaid_node"
-
-
-def _resolve_node_executable() -> str | None:
-    override = os.environ.get("CODEWIKI_NODE_PATH", "").strip()
-    if override:
-        path = Path(override)
-        return str(path) if path.is_file() else None
-    return shutil.which("node")
-
-
-def _ensure_mermaid_node_dependencies(node_dir: Path) -> bool:
-    global _node_validator_broken
-    if _node_validator_broken:
-        return False
-    marker = node_dir / "node_modules" / "mermaid"
-    if marker.is_dir():
-        return True
-    with _node_deps_lock:
-        if marker.is_dir():
-            return True
-        if _node_validator_broken:
-            return False
-        npm = shutil.which("npm")
-        if npm is None:
-            logger.debug("npm not found; cannot install bundled mermaid_node dependencies")
-            return False
-        for cmd in (
-            [npm, "ci", "--omit=dev"],
-            [npm, "install", "--omit=dev"],
-        ):
-            try:
-                result = subprocess.run(
-                    cmd,
-                    cwd=node_dir,
-                    capture_output=True,
-                    text=True,
-                    timeout=180,
-                )
-            except (OSError, subprocess.TimeoutExpired) as exc:
-                logger.debug("npm install for mermaid_node failed: %s", exc)
-                continue
-            if result.returncode == 0 and marker.is_dir():
-                return True
-        logger.debug(
-            "Could not install mermaid npm package under %s; Node validation unavailable",
-            node_dir,
-        )
-        _node_validator_broken = True
-        return False
-
-
-def _parse_via_node_validator(diagram_content: str) -> str | None:
-    """Validate via Node + validate.mjs. None if Node/script cannot run."""
-    global _node_validator_broken
-    if _node_validator_broken:
-        return None
-    node = _resolve_node_executable()
-    if node is None:
-        return None
-    node_dir = _mermaid_node_dir()
-    script = node_dir / "validate.mjs"
-    if not script.is_file():
-        logger.debug("Missing %s; skipping Node mermaid validation", script)
-        return None
-    if not _ensure_mermaid_node_dependencies(node_dir):
-        return None
-    try:
-        result = subprocess.run(
-            [node, str(script)],
-            cwd=node_dir,
-            input=diagram_content,
-            capture_output=True,
-            text=True,
-            timeout=_MERMAID_VALIDATE_TIMEOUT_SECONDS,
-        )
-    except (OSError, subprocess.TimeoutExpired):
-        return None
-    if result.returncode == 0:
-        return ""
-    err = (result.stderr or result.stdout or "").strip()
-    if err:
-        return err
-    return "Mermaid parse failed (no error message from Node validator)"
-
-
-async def _try_node_parse(diagram_content: str) -> str | None:
-    try:
-        return await asyncio.wait_for(
-            _run_in_daemon_thread(_parse_via_node_validator, diagram_content),
-            timeout=_MERMAID_VALIDATE_TIMEOUT_SECONDS + 5.0,
-        )
-    except asyncio.TimeoutError:
-        return None
-    except Exception:
-        return None
 
 
 async def _parse_with_pythonmonkey(diagram_content: str) -> None:

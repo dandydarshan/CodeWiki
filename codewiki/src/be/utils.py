@@ -156,7 +156,7 @@ def extract_mermaid_blocks(content: str) -> List[Tuple[int, str]]:
 
 # Set once PythonMonkey fails to import or loses its event loop; validation
 # then falls back to the Node script, then mermaid-py.
-_PYTHONMONKEY_BROKEN = True
+_PYTHONMONKEY_BROKEN = False
 
 # Local Node validator: subprocess to codewiki/mermaid_node/validate.mjs.
 # Runs when PythonMonkey returns None (unavailable), not on PM syntax errors.

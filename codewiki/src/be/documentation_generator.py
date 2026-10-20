@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 import os
@@ -6,7 +7,7 @@ from copy import deepcopy
 from typing import Any
 
 from codewiki import __version__
-from codewiki.src.be.backend import LLMBackend, get_backend
+from codewiki.src.be.backend import LLMBackend, UsageLedger, get_backend
 from codewiki.src.be.cluster_modules import (
     cluster_modules,
     ensure_artifact_module,
@@ -17,6 +18,7 @@ from codewiki.src.be.crosslinker import CrossLinkReport, crosslink_docs
 from codewiki.src.be.dependency_analyzer import DependencyGraphBuilder
 from codewiki.src.be.dependency_analyzer.analyzers.artifact import render_artifact_index
 from codewiki.src.be.dependency_analyzer.utils.paths import normalize_module_tree_ids
+from codewiki.src.be.generation_progress import NULL_PROGRESS, GenerationProgress
 from codewiki.src.be.doc_layout import (
     config_layout,
     list_doc_files,
@@ -69,6 +71,14 @@ class DocumentationGenerator:
         self.graph_builder = DependencyGraphBuilder(config)
         self.backend: LLMBackend = backend or get_backend(config)
 
+    @property
+    def usage_ledger(self) -> UsageLedger:
+        """The backend's usage ledger (a throwaway one for backends without it)."""
+        ledger = getattr(getattr(self, "backend", None), "usage_ledger", None)
+        if not isinstance(ledger, UsageLedger):
+            ledger = self.__dict__.setdefault("_fallback_ledger", UsageLedger())
+        return ledger
+
     def create_documentation_metadata(
         self, working_dir: str, components: dict[str, Any], num_leaf_nodes: int
     ):
@@ -78,6 +88,7 @@ class DocumentationGenerator:
         metadata = {
             "generation_info": {
                 "timestamp": datetime.now(UTC).isoformat(),
+                "provider": getattr(self.config, "provider", None),
                 "main_model": self.config.main_model,
                 "generator_version": __version__,
                 "repo_path": self.config.repo_path,
@@ -93,6 +104,8 @@ class DocumentationGenerator:
                 "max_depth": self.config.max_depth,
             },
             "files_generated": ["overview.md", "module_tree.json", "first_module_tree.json"],
+            # Tokens and cost of every LLM call in this run (see UsageLedger)
+            "usage": self.usage_ledger.summary(),
         }
 
         # Add generated markdown files (docs-relative paths) to the metadata
@@ -250,96 +263,147 @@ class DocumentationGenerator:
         module_tree_path = os.path.join(working_dir, MODULE_TREE_FILENAME)
         module_tree = file_manager.load_json(module_tree_path)
 
-        # Get processing order (leaf modules first) from module_tree.json, not
-        # first_module_tree.json. The first tree only holds the initial
-        # clustering result (and stays {} in whole-repository mode), while
-        # module_tree.json also carries the sub-modules agents inserted via
-        # generate_sub_module_documentation_tool. --update/--compare-to
-        # invalidates docs against module_tree.json, so ordering from the
-        # first tree would skip any invalidated agent-inserted module and the
-        # run would end in IncompleteDocumentationError. Iterating the full
-        # tree is safe on resume: every module whose .md already exists
-        # short-circuits in run_module_agent/generate_parent_module_docs, so
-        # unaffected modules cost no LLM calls. In whole-repository mode a
-        # regenerated overview.md is rebuilt from the module docs via
-        # generate_parent_module_docs([]) rather than by the whole-repo agent.
-        processing_order = self.get_processing_order(module_tree)
+        # Process the tree from module_tree.json, not first_module_tree.json.
+        # The first tree only holds the initial clustering result (and stays
+        # {} in whole-repository mode), while module_tree.json also carries
+        # the sub-modules agents inserted via generate_sub_module_documentation.
+        # --update/--compare-to invalidates docs against module_tree.json, so
+        # walking the first tree would skip any invalidated agent-inserted
+        # module and the run would end in IncompleteDocumentationError.
+        # Walking the full tree is safe on resume: every module whose .md
+        # already exists short-circuits in run_module_agent /
+        # generate_parent_module_docs, so unaffected modules cost no LLM
+        # calls. In whole-repository mode a regenerated overview.md is rebuilt
+        # from the module docs via generate_parent_module_docs([]) rather than
+        # by the whole-repo agent.
+        with self.usage_ledger.in_phase("modules"):
+            return await self._generate_modules(components, leaf_nodes, working_dir, module_tree)
 
-        # Process modules in dependency order
+    async def _generate_modules(
+        self,
+        components: dict[str, Any],
+        leaf_nodes: list[str],
+        working_dir: str,
+        module_tree: dict[str, Any],
+    ) -> str:
         final_module_tree = module_tree
-        processed_modules = set()
 
-        if len(module_tree) > 0:
-            for module_path, module_name in processing_order:
-                try:
-                    # Reload module tree to get latest hierarchical structure from sub-agent modifications
-                    module_tree = file_manager.load_json(module_tree_path)
+        # Status line after every page; agents' sub-modules add to the total
+        # as they are planned (the backends reach the reporter through
+        # ``backend.progress``).
+        emit = getattr(self, "progress_emit", None)
+        slots = getattr(self.backend, "slots", None)
+        progress = GenerationProgress(
+            getattr(self.config, "concurrency", 1),
+            emit=emit,
+            active=(lambda: slots.active) if slots is not None else None,
+        )
+        self.backend.progress = progress
 
-                    # Get the module info from the tree
-                    module_info = module_tree
-                    for path_part in module_path:
-                        module_info = module_info[path_part]
-                        if path_part != module_path[-1]:  # Not the last part
-                            module_info = module_info.get("children", {})
+        with progress.activate():
+            if len(module_tree) > 0:
+                progress.add(self._count_modules(module_tree) + 1)  # + repository overview
+                await self._process_module_tree(module_tree, components, working_dir, progress)
 
-                    # Skip if already processed
-                    module_key = "/".join(module_path)
-                    if module_key in processed_modules:
-                        continue
+                # Generate repo overview
+                logger.info("📚 Generating repository overview")
+                with progress.track("Repository overview"):
+                    final_module_tree = await self.generate_parent_module_docs(
+                        [], working_dir, components=components
+                    )
+            else:
+                logger.info("Processing whole repo because repo can fit in the context window")
+                repo_name = os.path.basename(os.path.normpath(self.config.repo_path))
+                progress.add(1)
+                with progress.track(repo_name):
+                    final_module_tree = await self.backend.run_module_agent(
+                        module_name=repo_name,
+                        components=components,
+                        core_component_ids=leaf_nodes,
+                        module_path=[],
+                        working_dir=working_dir,
+                    )
 
-                    # Process the module
-                    if self.is_leaf_module(module_info):
-                        logger.info(f"📄 Processing leaf module: {module_key}")
-                        final_module_tree = await self.backend.run_module_agent(
-                            module_name=module_name,
-                            components=components,
-                            core_component_ids=module_info["components"],
-                            module_path=module_path,
-                            working_dir=working_dir,
-                        )
-                    else:
-                        logger.info(f"📁 Processing parent module: {module_key}")
-                        final_module_tree = await self.generate_parent_module_docs(
-                            module_path, working_dir
-                        )
+                # save final_module_tree to module_tree.json
+                file_manager.save_json(
+                    final_module_tree, os.path.join(working_dir, MODULE_TREE_FILENAME)
+                )
 
-                    processed_modules.add(module_key)
-
-                except Exception as e:  # noqa: BLE001 — one failed module must not abort the run
-                    logger.error(f"Failed to process module {module_key}: {e!s}")
-                    logger.error(f"Traceback: {traceback.format_exc()}")
-                    continue
-
-            # Generate repo overview
-            logger.info("📚 Generating repository overview")
-            final_module_tree = await self.generate_parent_module_docs(
-                [], working_dir, components=components
-            )
-        else:
-            logger.info("Processing whole repo because repo can fit in the context window")
-            repo_name = os.path.basename(os.path.normpath(self.config.repo_path))
-            final_module_tree = await self.backend.run_module_agent(
-                module_name=repo_name,
-                components=components,
-                core_component_ids=leaf_nodes,
-                module_path=[],
-                working_dir=working_dir,
-            )
-
-            # save final_module_tree to module_tree.json
-            file_manager.save_json(
-                final_module_tree, os.path.join(working_dir, MODULE_TREE_FILENAME)
-            )
-
-            # rename repo_name.md to overview.md
-            repo_overview_path = os.path.join(working_dir, f"{repo_name}.md")
-            if os.path.exists(repo_overview_path):
-                os.rename(repo_overview_path, os.path.join(working_dir, OVERVIEW_FILENAME))
+                # rename repo_name.md to overview.md
+                repo_overview_path = os.path.join(working_dir, f"{repo_name}.md")
+                if os.path.exists(repo_overview_path):
+                    os.rename(repo_overview_path, os.path.join(working_dir, OVERVIEW_FILENAME))
+        for line in progress.summary():
+            (emit or logger.info)(line)
 
         # Move pages an agent saved in the wrong folder and fix links between pages
         organize_docs(working_dir, config_layout(self.config))
 
         return working_dir
+
+    @classmethod
+    def _count_modules(cls, tree: dict[str, Any]) -> int:
+        """Modules in a tree, parents included (each one is a page)."""
+        count = 0
+        for info in tree.values():
+            count += 1
+            children = info.get("children") if isinstance(info, dict) else None
+            if isinstance(children, dict):
+                count += cls._count_modules(children)
+        return count
+
+    async def _process_module_tree(
+        self,
+        module_tree: dict[str, Any],
+        components: dict[str, Any],
+        working_dir: str,
+        progress: GenerationProgress = NULL_PROGRESS,
+    ) -> None:
+        """Document every module, children before their parent.
+
+        Modules that do not depend on each other (siblings, and leaves of
+        different branches) run concurrently, up to ``config.concurrency`` at
+        a time; with concurrency 1 they run one after another as before. A
+        parent page is written once all its children are done, since it
+        summarizes their pages.
+        """
+        gate = asyncio.Semaphore(max(1, int(getattr(self.config, "concurrency", 1) or 1)))
+
+        async def process(module_path: list[str], module_info: dict[str, Any]) -> None:
+            module_key = "/".join(module_path)
+            children = module_info.get("children")
+            try:
+                if isinstance(children, dict) and children:
+                    await asyncio.gather(
+                        *(process(module_path + [name], info) for name, info in children.items())
+                    )
+                    async with gate:
+                        logger.info(f"📁 Processing parent module: {module_key}")
+                        with progress.track(module_key):
+                            await self.generate_parent_module_docs(module_path, working_dir)
+                else:
+                    async with gate:
+                        logger.info(f"📄 Processing leaf module: {module_key}")
+                        with progress.track(module_key):
+                            await self.backend.run_module_agent(
+                                module_name=module_path[-1],
+                                components=components,
+                                core_component_ids=module_info["components"],
+                                module_path=module_path,
+                                working_dir=working_dir,
+                            )
+            except Exception as e:  # noqa: BLE001 — one failed module must not abort the run
+                logger.error(f"Failed to process module {module_key}: {e!s}")
+                logger.error(f"Traceback: {traceback.format_exc()}")
+
+        await asyncio.gather(*(process([name], info) for name, info in module_tree.items()))
+
+    async def _complete(self, prompt: str, system_prompt: str) -> str:
+        """Single-shot completion off the event loop, so running agents keep going."""
+        complete_async = getattr(self.backend, "complete_async", None)
+        if complete_async is not None:
+            return await complete_async(prompt, system_prompt=system_prompt)
+        return await asyncio.to_thread(self.backend.complete, prompt, system_prompt=system_prompt)
 
     async def generate_parent_module_docs(
         self,
@@ -401,11 +465,13 @@ class DocumentationGenerator:
                 )
         logger.debug(f"Overview prompt for {module_name}: {len(prompt)} chars")
 
+        phase = "overview" if not module_path else "parent_modules"
         try:
-            parent_docs = self.backend.complete(
-                prompt,
-                system_prompt=format_overview_system_prompt(self.config.get_prompt_addition()),
-            )
+            with self.usage_ledger.in_phase(phase, target=module_name):
+                parent_docs = await self._complete(
+                    prompt,
+                    system_prompt=format_overview_system_prompt(self.config.get_prompt_addition()),
+                )
             if not parent_docs:
                 raise RuntimeError(
                     f"LLM returned empty content for {module_name} overview "
@@ -484,18 +550,19 @@ class DocumentationGenerator:
                 # one is set.  Caw mode's cluster_model is typically empty —
                 # complete() falls back to its own _model in that case.
                 cluster_model = self.config.cluster_model or None
-                module_tree = cluster_modules(
-                    leaf_nodes,
-                    components,
-                    self.config,
-                    completer=lambda p: self.backend.complete(p, model=cluster_model),
-                )
-                if module_tree:
-                    module_tree = super_group_modules(
-                        module_tree,
+                with self.usage_ledger.in_phase("clustering"):
+                    module_tree = cluster_modules(
+                        leaf_nodes,
+                        components,
                         self.config,
                         completer=lambda p: self.backend.complete(p, model=cluster_model),
                     )
+                    if module_tree:
+                        module_tree = super_group_modules(
+                            module_tree,
+                            self.config,
+                            completer=lambda p: self.backend.complete(p, model=cluster_model),
+                        )
                 # Artifact nodes the clustering LLM dropped get a fixed module
                 # so build/CI/config coverage does not depend on the LLM.
                 if getattr(self.config, "artifacts_enabled", True):

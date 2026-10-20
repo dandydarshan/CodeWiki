@@ -25,6 +25,7 @@
     <script src="https://cdn.jsdelivr.net/npm/mermaid@11.9.0/dist/mermaid.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/marked@11.0.0/marked.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/marked-gfm-heading-id@3.1.3/lib/index.umd.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/dompurify@3.2.4/dist/purify.min.js"></script>
     <style>
         :root {
             --primary-color: #d95f00;
@@ -617,19 +618,36 @@
 
         .nav-toggle {
             flex-shrink: 0;
-            width: 22px;
-            height: 22px;
+            width: 32px;
+            height: 32px;
             display: flex;
             align-items: center;
             justify-content: center;
             background: none;
             border: none;
+            border-radius: 6px;
             padding: 0;
             color: var(--muted-color);
-            font-size: 11px;
             cursor: pointer;
-            transition: transform 0.15s ease;
+            transition: transform 0.15s ease, background 0.15s ease, color 0.15s ease;
             transform: rotate(90deg);
+        }
+
+        .nav-toggle svg {
+            width: 16px;
+            height: 16px;
+            fill: none;
+            stroke: currentColor;
+            stroke-width: 2;
+            stroke-linecap: round;
+            stroke-linejoin: round;
+        }
+
+        .nav-toggle:hover,
+        .nav-toggle:focus-visible {
+            background: var(--border-color);
+            color: var(--text-color);
+            outline: none;
         }
 
         .nav-group.collapsed > .nav-row .nav-toggle {
@@ -915,7 +933,7 @@
             display: none;
             position: fixed;
             inset: 0;
-            z-index: 400;
+            z-index: 700; /* above the chat panel, whose answers open diagrams too */
             background: var(--lightbox-bg);
         }
 
@@ -929,10 +947,18 @@
             overflow: hidden;
             cursor: grab;
             touch-action: none;
+            user-select: none;
+            -webkit-user-select: none;
         }
 
         .lightbox-canvas.dragging {
             cursor: grabbing;
+        }
+
+        /* Own GPU layer while panning, so the SVG is not repainted on every move;
+           dropped on release so the diagram re-renders sharp at its zoom. */
+        .lightbox-canvas.dragging .lightbox-stage {
+            will-change: transform;
         }
 
         .lightbox-stage {
@@ -1211,6 +1237,555 @@
                 padding-left: 52px;
             }
         }
+
+        /* ---------- Ask AI chat (talks to `codewiki serve` on this machine) ---------- */
+        .content-toolbar {
+            display: flex;
+            gap: 8px;
+            align-items: stretch;
+        }
+
+        .content-toolbar .search-trigger {
+            flex: 1;
+        }
+
+        .chat-trigger {
+            flex-shrink: 0;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            padding: 8px 12px;
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            font-size: 13px;
+            font-family: inherit;
+            background: var(--panel-bg);
+            color: var(--text-color);
+            cursor: pointer;
+            transition: border-color 0.2s;
+        }
+
+        .chat-trigger:hover,
+        .chat-trigger:focus {
+            border-color: var(--primary-color);
+            outline: none;
+        }
+
+        .chat-panel {
+            --chat-gutter: 20px; /* one side margin for header, messages and input */
+            position: fixed;
+            top: 0;
+            right: 0;
+            bottom: 0;
+            z-index: 600;
+            width: min(440px, 100vw);
+            display: flex;
+            flex-direction: column;
+            background: var(--panel-bg);
+            border-left: 1px solid var(--border-color);
+            box-shadow: -12px 0 40px rgba(0, 0, 0, 0.18);
+            transform: translateX(100%);
+            /* Hidden once slid away: no shadow on the page edge, no Tab stops. */
+            visibility: hidden;
+            transition: transform 0.2s ease, visibility 0s linear 0.2s;
+        }
+
+        .chat-panel.open {
+            transform: none;
+            visibility: visible;
+            transition: transform 0.2s ease;
+        }
+
+        .chat-header {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 12px var(--chat-gutter);
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        .chat-title {
+            font-weight: 600;
+            color: var(--heading-color);
+        }
+
+        .chat-freshness {
+            flex: 1;
+            font-size: 11px;
+            color: var(--muted-color);
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .chat-close,
+        .chat-new {
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            padding: 3px 8px;
+            font-size: 12px;
+            background: transparent;
+            color: var(--muted-color);
+            cursor: pointer;
+        }
+
+        .chat-close {
+            display: inline-flex;
+            align-items: center;
+            padding: 3px 6px;
+        }
+
+        .chat-close svg,
+        .chat-action svg,
+        .chat-send svg {
+            width: 14px;
+            height: 14px;
+            fill: none;
+            stroke: currentColor;
+            stroke-width: 2;
+            stroke-linecap: round;
+            stroke-linejoin: round;
+        }
+
+        .chat-close:hover,
+        .chat-new:hover {
+            color: var(--text-color);
+            border-color: var(--primary-color);
+        }
+
+        .chat-messages {
+            flex: 1;
+            overflow-y: auto;
+            scrollbar-gutter: stable;
+            padding: 16px var(--chat-gutter);
+            display: flex;
+            flex-direction: column;
+            gap: 18px;
+        }
+
+        .chat-turn {
+            display: flex;
+            flex-direction: column;
+            min-width: 0;
+        }
+
+        .chat-turn.user {
+            align-items: flex-end;
+        }
+
+        .chat-msg {
+            min-width: 0;
+            max-width: 100%;
+            font-size: 14px;
+            line-height: 1.6;
+            color: var(--body-color);
+            overflow-wrap: break-word;
+        }
+
+        .chat-msg > :first-child {
+            margin-top: 0;
+        }
+
+        .chat-msg > :last-child {
+            margin-bottom: 0;
+        }
+
+        .chat-msg p,
+        .chat-msg ul,
+        .chat-msg ol {
+            margin: 0 0 10px;
+        }
+
+        .chat-msg ul,
+        .chat-msg ol {
+            padding-left: 22px;
+        }
+
+        .chat-msg h1,
+        .chat-msg h2,
+        .chat-msg h3,
+        .chat-msg h4 {
+            margin: 14px 0 8px;
+            font-size: 15px;
+            color: var(--heading-color);
+        }
+
+        .chat-msg :not(pre) > code {
+            overflow-wrap: anywhere;
+        }
+
+        .chat-msg.user {
+            max-width: 85%;
+            padding: 8px 12px;
+            border-radius: 12px 12px 2px 12px;
+            background: var(--secondary-color);
+            color: var(--text-color);
+            white-space: pre-wrap;
+        }
+
+        .chat-msg.assistant pre {
+            max-width: 100%;
+            margin: 10px 0;
+            padding: 10px 12px;
+            overflow-x: auto;
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            background: var(--code-bg);
+            font-size: 12px;
+        }
+
+        .chat-msg.assistant pre code {
+            padding: 0;
+            background: none;
+        }
+
+        .chat-msg table {
+            display: block;
+            max-width: 100%;
+            margin: 10px 0;
+            overflow-x: auto;
+            border-collapse: collapse;
+            font-size: 13px;
+        }
+
+        .chat-msg th,
+        .chat-msg td {
+            padding: 6px 10px;
+            border: 1px solid var(--border-color);
+            text-align: left;
+            vertical-align: top;
+        }
+
+        .chat-msg th {
+            background: var(--secondary-color);
+        }
+
+        /* Names stay whole in table cells; a wide table scrolls instead. */
+        .chat-msg td code,
+        .chat-msg th code {
+            white-space: nowrap;
+            overflow-wrap: normal;
+        }
+
+        .chat-msg .mermaid {
+            margin: 10px 0;
+            overflow-x: auto;
+        }
+
+        .chat-msg.notice {
+            font-size: 13px;
+            font-style: italic;
+            color: var(--muted-color);
+        }
+
+        .chat-actions {
+            display: flex;
+            gap: 2px;
+            margin: 4px -6px 0; /* icons line up with the text above */
+            opacity: 0.7;
+            transition: opacity 0.15s;
+        }
+
+        .chat-turn:hover .chat-actions,
+        .chat-actions:focus-within {
+            opacity: 1;
+        }
+
+        .chat-action {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            padding: 3px 6px;
+            border: none;
+            border-radius: 6px;
+            background: transparent;
+            color: var(--muted-color);
+            font: inherit;
+            font-size: 12px;
+            cursor: pointer;
+        }
+
+        .chat-action:hover,
+        .chat-action:focus-visible {
+            background: var(--secondary-color);
+            color: var(--text-color);
+            outline: none;
+        }
+
+        .chat-edit {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+            width: 85%;
+        }
+
+        .chat-edit .chat-input {
+            resize: vertical;
+        }
+
+        .chat-edit-actions {
+            display: flex;
+            justify-content: flex-end;
+            gap: 6px;
+        }
+
+        .chat-edit-actions .chat-send {
+            padding: 4px 12px;
+        }
+
+        .chat-progress {
+            padding: 10px 12px;
+            border: 1px solid var(--border-color);
+            border-radius: 10px;
+            font-size: 13px;
+            color: var(--body-color);
+        }
+
+        .chat-progress-head {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .chat-progress-time {
+            margin-left: auto;
+            font-variant-numeric: tabular-nums;
+            color: var(--muted-color);
+        }
+
+        .chat-steps {
+            margin: 8px 0 0;
+            padding: 0;
+            list-style: none;
+        }
+
+        .chat-steps li {
+            display: flex;
+            gap: 8px;
+            padding: 2px 0;
+        }
+
+        .chat-steps li.done {
+            color: var(--muted-color);
+        }
+
+        .chat-step-mark {
+            width: 12px;
+            flex-shrink: 0;
+            text-align: center;
+        }
+
+        .chat-steps li.current .chat-step-mark {
+            color: var(--primary-color);
+        }
+
+        .chat-step-text {
+            flex: 1;
+            min-width: 0;
+        }
+
+        .chat-step-time {
+            font-variant-numeric: tabular-nums;
+            color: var(--muted-color);
+        }
+
+        .chat-progress-hint {
+            margin-top: 8px;
+            font-size: 12px;
+            color: var(--muted-color);
+        }
+
+        .chat-spinner {
+            width: 12px;
+            height: 12px;
+            flex-shrink: 0;
+            border: 2px solid var(--border-color);
+            border-top-color: var(--primary-color);
+            border-radius: 50%;
+            animation: chat-spin 0.8s linear infinite;
+        }
+
+        @keyframes chat-spin {
+            to {
+                transform: rotate(360deg);
+            }
+        }
+
+        @media (prefers-reduced-motion: reduce) {
+            .chat-spinner {
+                animation: none;
+            }
+        }
+
+        .chat-msg.error {
+            padding: 8px 12px;
+            border: 1px solid var(--error-border);
+            border-radius: 8px;
+            background: var(--error-bg);
+            color: var(--error-color);
+        }
+
+        .chat-msg a.chat-cite {
+            text-decoration: none;
+            border-bottom: 1px dotted var(--primary-color);
+        }
+
+        .chat-sources {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px;
+            margin-top: 8px;
+        }
+
+        .chat-source {
+            font-size: 11px;
+            padding: 2px 8px;
+            border: 1px solid var(--border-color);
+            border-radius: 999px;
+            color: var(--muted-color);
+            text-decoration: none;
+            cursor: pointer;
+            max-width: 100%;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .chat-source.stale {
+            border-style: dashed;
+        }
+
+        .chat-stats {
+            margin-top: 6px;
+            font-size: 11px;
+            color: var(--muted-color);
+        }
+
+        .chat-status {
+            min-height: 18px;
+            padding: 0 var(--chat-gutter) 6px;
+            font-size: 12px;
+            color: var(--muted-color);
+        }
+
+        .chat-form {
+            display: flex;
+            gap: 8px;
+            padding: 12px var(--chat-gutter) 16px;
+            border-top: 1px solid var(--border-color);
+        }
+
+        .chat-input {
+            flex: 1;
+            min-height: 40px;
+            max-height: 160px;
+            resize: vertical;
+            padding: 8px 10px;
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            font: inherit;
+            font-size: 14px;
+            background: var(--page-bg);
+            color: var(--text-color);
+        }
+
+        .chat-input:focus {
+            outline: none;
+            border-color: var(--primary-color);
+        }
+
+        .chat-send {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 6px;
+            padding: 0 14px;
+            border: 1px solid var(--primary-color);
+            border-radius: 8px;
+            background: var(--primary-color);
+            color: #fff;
+            font: inherit;
+            font-weight: 600;
+            cursor: pointer;
+        }
+
+        .chat-send.stop {
+            border-color: var(--border-color);
+            background: var(--panel-bg);
+            color: var(--text-color);
+        }
+
+        .chat-send.stop svg {
+            fill: currentColor;
+        }
+
+        .chat-trigger {
+            position: relative;
+        }
+
+        .chat-trigger.busy .chat-trigger-icon {
+            animation: chat-pulse 1.2s ease-in-out infinite;
+        }
+
+        .chat-trigger.unread::after {
+            content: '';
+            position: absolute;
+            top: -3px;
+            right: -3px;
+            width: 9px;
+            height: 9px;
+            border-radius: 50%;
+            background: var(--primary-color);
+            border: 2px solid var(--page-bg);
+        }
+
+        @keyframes chat-pulse {
+            50% {
+                opacity: 0.35;
+            }
+        }
+
+        @media (prefers-reduced-motion: reduce) {
+            .chat-trigger.busy .chat-trigger-icon {
+                animation: none;
+            }
+        }
+
+        .chat-send:disabled {
+            opacity: 0.5;
+            cursor: default;
+        }
+
+        .chat-offline {
+            font-size: 14px;
+            color: var(--body-color);
+        }
+
+        .chat-offline pre {
+            position: relative;
+            padding: 10px 12px;
+            border-radius: 8px;
+            background: var(--code-bg);
+            border: 1px solid var(--border-color);
+            font-size: 13px;
+        }
+
+        .stale-banner {
+            margin-bottom: 16px;
+            padding: 10px 14px;
+            border: 1px solid var(--border-color);
+            border-left: 4px solid var(--primary-color);
+            border-radius: 6px;
+            background: var(--secondary-color);
+            font-size: 13px;
+            color: var(--text-color);
+        }
+
+        @media (max-width: 768px) {
+            .chat-trigger-label {
+                display: none;
+            }
+        }
     </style>
 </head>
 <body>
@@ -1227,6 +1802,23 @@
             <div class="search-modal-results" id="search-modal-results"></div>
         </div>
     </div>
+
+    <aside class="chat-panel" id="chat-panel" aria-label="Ask AI" aria-hidden="true">
+        <div class="chat-header">
+            <span class="chat-title">Ask AI</span>
+            <span class="chat-freshness" id="chat-freshness"></span>
+            <button class="chat-new" id="chat-new" type="button" title="Start a new conversation">New</button>
+            <button class="chat-close" id="chat-close" type="button" aria-label="Minimize chat" title="Minimize (Esc)">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14"/></svg>
+            </button>
+        </div>
+        <div class="chat-messages" id="chat-messages"></div>
+        <div class="chat-status" id="chat-status" aria-live="polite"></div>
+        <form class="chat-form" id="chat-form">
+            <textarea class="chat-input" id="chat-input" rows="2" placeholder="Ask about the code, e.g. what breaks if I rename X?" aria-label="Your question"></textarea>
+            <button class="chat-send" id="chat-send" type="submit">Ask</button>
+        </form>
+    </aside>
 
     <div class="container">
         <nav class="sidebar" id="sidebar">
@@ -1263,6 +1855,10 @@
                             <span class="search-trigger-icon">🔎</span>
                             <span class="search-trigger-label">Search docs…</span>
                             <span class="search-trigger-kbd">Ctrl K</span>
+                        </button>
+                        <button class="chat-trigger" id="chat-trigger" type="button" aria-label="Ask AI about this codebase">
+                            <span class="chat-trigger-icon">💬</span>
+                            <span class="chat-trigger-label">Ask AI</span>
                         </button>
                     </div>
                     <div class="doc-column">
@@ -1392,6 +1988,7 @@
             setupMobileDrawer();
             setupLinkInterception();
             setupSearchModal();
+            setupChat();
             setupStickyToolbar();
             initMermaid();
 
@@ -1527,7 +2124,8 @@
             const collapsed = depth >= 1 ? ' collapsed' : '';
             return '<div class="nav-group' + collapsed + '">' +
                 '<div class="nav-row">' + inner +
-                '<button class="nav-toggle" type="button" aria-label="Toggle section">▸</button></div>' +
+                '<button class="nav-toggle" type="button" aria-label="Toggle section">' +
+                '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M6 3.5L10.5 8 6 12.5"/></svg></button></div>' +
                 '<div class="nav-children">' + childrenHtml + '</div></div>';
         }
 
@@ -1610,6 +2208,11 @@
                         node.classList.toggle('filter-open', anyMatch);
                     }
                 });
+                // The full list is back: scroll to the current page, as a cross-link does.
+                // Next frame: the browser's own keep-the-caret-visible scroll after an
+                // edit would cancel a scroll started now.
+                const active = nav.querySelector('.nav-item.active');
+                if (!query && active) requestAnimationFrame(function() { revealInSidebar(active); });
             });
         }
 
@@ -2254,6 +2857,7 @@
 
                 buildTOC();
                 renderPagerLinks(filename);
+                showStaleBanner(filename);
 
                 // Scroll after diagrams render, since they shift the layout
                 if (anchor) {
@@ -2319,9 +2923,14 @@
             }
         }
 
+        function sanitizeHtml(html) {
+            // Pages and chat answers are model-written: never let them run script.
+            return window.DOMPurify ? DOMPurify.sanitize(html) : html;
+        }
+
         function renderMarkdown(markdown) {
             // Convert markdown to HTML using marked
-            let html = marked.parse(markdown);
+            let html = sanitizeHtml(marked.parse(markdown));
 
             // Process mermaid code blocks
             html = html.replace(
@@ -2382,8 +2991,11 @@
             });
         }
 
-        async function renderMermaidDiagrams() {
-            const mermaidElements = document.querySelectorAll('#content .mermaid');
+        let mermaidRenderSeq = 0;
+
+        // `root`: the page (default) or the chat, whose answers can hold diagrams too.
+        async function renderMermaidDiagrams(root) {
+            const mermaidElements = (root || document.getElementById('content')).querySelectorAll('.mermaid');
 
             for (let i = 0; i < mermaidElements.length; i++) {
                 const element = mermaidElements[i];
@@ -2393,7 +3005,7 @@
                 }
 
                 try {
-                    const renderId = 'mermaid-svg-' + Date.now() + '-' + i;
+                    const renderId = 'mermaid-svg-' + (++mermaidRenderSeq);
                     const { svg } = await mermaid.render(renderId, element.dataset.src);
                     element.innerHTML = svg;
                     makeMermaidZoomable(element);
@@ -2474,6 +3086,10 @@
             let lastPinchDist = 0;
 
             canvas.addEventListener('pointerdown', function(e) {
+                if (e.pointerType === 'mouse' && e.button !== 0) return;
+                // Without this the drag also selects the diagram's text, which
+                // makes panning stutter.
+                e.preventDefault();
                 canvas.setPointerCapture(e.pointerId);
                 pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
                 if (pointers.size === 1) canvas.classList.add('dragging');
@@ -2583,9 +3199,16 @@
             applyLightboxTransform();
         }
 
+        let lightboxFrame = 0;
+
+        // At most one transform per frame: a fast mouse sends several moves per frame.
         function applyLightboxTransform() {
-            const stage = lightboxEl.querySelector('.lightbox-stage');
-            stage.style.transform = 'translate(' + lightboxState.tx + 'px, ' + lightboxState.ty + 'px) scale(' + lightboxState.scale + ')';
+            if (lightboxFrame) return;
+            lightboxFrame = requestAnimationFrame(function() {
+                lightboxFrame = 0;
+                const stage = lightboxEl.querySelector('.lightbox-stage');
+                stage.style.transform = 'translate(' + lightboxState.tx + 'px, ' + lightboxState.ty + 'px) scale(' + lightboxState.scale + ')';
+            });
         }
 
         function closeMermaidLightbox() {
@@ -2719,10 +3342,11 @@
                 closeMermaidLightbox();
 
                 // Re-render diagrams from their stored source in the new theme
-                document.querySelectorAll('#content .mermaid').forEach(el => {
+                document.querySelectorAll('.mermaid').forEach(el => {
                     if (el.dataset.src) el.innerHTML = '';
                 });
                 await renderMermaidDiagrams();
+                await renderMermaidDiagrams(document.getElementById('chat-messages'));
             });
         }
 
@@ -2751,6 +3375,616 @@
         function closeDrawer() {
             document.getElementById('sidebar').classList.remove('open');
             document.getElementById('backdrop').classList.remove('visible');
+        }
+
+        // ---------- Ask AI ----------
+        // The page never holds an API key: questions go to `codewiki serve`
+        // on the developer's machine, which answers with their CodeWiki config.
+
+        const CHAT_CONFIG = (CONFIG && CONFIG.chat) || {};
+        const CHAT_SESSION_KEY = 'codewiki-chat:' + (CONFIG.repository_url || document.title);
+        let chatServer = null;      // {base, health} once found
+        let chatBusy = false;
+        let chatAbort = null;       // AbortController of the question being answered
+        let chatProgress = null;    // {start, steps: [{text, start, end}]} while busy
+        let chatTimer = null;
+        let chatEditing = null;     // index of the question being edited
+        let chatState = { sessionId: null, messages: [] };
+
+        const CHAT_ICONS = {
+            copy: '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>',
+            check: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12l5 5 9-10"/></svg>',
+            retry: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12a8 8 0 1 0 2.4-5.7"/><path d="M4 4v5h5"/></svg>',
+            edit: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20h4L19 9l-4-4L4 16v4z"/><path d="M13 7l4 4"/></svg>',
+            stop: '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="7" y="7" width="10" height="10" rx="1.5"/></svg>'
+        };
+
+        function chatLoadState() {
+            try {
+                const saved = JSON.parse(sessionStorage.getItem(CHAT_SESSION_KEY) || 'null');
+                if (saved && Array.isArray(saved.messages)) chatState = saved;
+            } catch (e) { /* storage unavailable: start fresh */ }
+        }
+
+        function chatSaveState() {
+            try { sessionStorage.setItem(CHAT_SESSION_KEY, JSON.stringify(chatState)); } catch (e) { }
+        }
+
+        function chatCandidates() {
+            const out = [];
+            // Served by `codewiki serve` itself: same origin, no cross-site request.
+            if (location.protocol === 'http:' || location.protocol === 'https:') out.push(location.origin);
+            (CHAT_CONFIG.endpoints || ['http://127.0.0.1:8765']).forEach(function(e) {
+                const base = String(e).replace(/\/+$/, '');
+                if (out.indexOf(base) === -1) out.push(base);
+            });
+            return out;
+        }
+
+        async function probeChatServer(base) {
+            const ctrl = new AbortController();
+            const timer = setTimeout(function() { ctrl.abort(); }, 1500);
+            try {
+                const r = await fetch(base + '/api/health', { signal: ctrl.signal });
+                if (!r.ok) return null;
+                const health = await r.json();
+                return health && health.ok ? { base: base, health: health } : null;
+            } catch (e) {
+                return null;
+            } finally {
+                clearTimeout(timer);
+            }
+        }
+
+        async function findChatServer(sameOriginOnly) {
+            if (chatServer) return chatServer;
+            const bases = chatCandidates().filter(function(b) {
+                return !sameOriginOnly || b === location.origin;
+            });
+            for (const base of bases) {
+                const found = await probeChatServer(base);
+                if (found) {
+                    chatServer = found;
+                    renderChatFreshness();
+                    return found;
+                }
+            }
+            return null;
+        }
+
+        function renderChatFreshness() {
+            const el = document.getElementById('chat-freshness');
+            if (!el) return;
+            el.textContent = chatServer ? chatServer.health.freshness.summary : '';
+            el.title = el.textContent;
+        }
+
+        function showStaleBanner(filename) {
+            if (!chatServer) return;
+            const stale = chatServer.health.freshness.stale_pages || [];
+            if (stale.indexOf(filename) === -1) return;
+            const content = document.getElementById('content');
+            if (content.querySelector('.stale-banner')) return;
+            const banner = document.createElement('div');
+            banner.className = 'stale-banner';
+            banner.innerHTML = '⚠️ The code this page describes changed after it was written (' +
+                escapeHtml(chatServer.health.freshness.summary) + '). Ask AI answers from the current ' +
+                'code; refresh the page with <code>codewiki generate --update</code>.';
+            content.insertBefore(banner, content.firstChild);
+        }
+
+        function codeLink(path, start, end) {
+            const repo = CONFIG.repository_url;
+            if (!repo) return null;
+            const ref = CONFIG.commit_id || 'HEAD';
+            let url = repo.replace(/\/+$/, '') + '/blob/' + ref + '/' + path;
+            if (start) url += '#L' + start + (end && end !== start ? '-L' + end : '');
+            return url;
+        }
+
+        // `src/x.py:L10-L20`, `src/x.py:10`, `Page.md#anchor` -> links
+        const CITE_CODE_RE = /^([\w.\/-]+\.[\w]+):L?(\d+)(?:-L?(\d+))?$/;
+        const CITE_PAGE_RE = /^([\w.,&()\/ -]+\.md)(?:#([\w-]+))?$/;
+
+        function linkCitation(text) {
+            let m = text.match(CITE_PAGE_RE);
+            if (m) return { page: m[1], anchor: m[2] || null };
+            m = text.match(CITE_CODE_RE);
+            if (m) return { url: codeLink(m[1], m[2], m[3]) };
+            return null;
+        }
+
+        function decorateCitations(root) {
+            root.querySelectorAll('code').forEach(function(code) {
+                if (code.closest('pre')) return;
+                const target = linkCitation(code.textContent.trim());
+                if (!target) return;
+                const a = document.createElement('a');
+                a.className = 'chat-cite';
+                if (target.page) {
+                    a.href = buildHash(target.page, target.anchor);
+                    a.addEventListener('click', function(e) {
+                        e.preventDefault();
+                        navigateTo(target.page, target.anchor);
+                    });
+                } else if (target.url) {
+                    a.href = target.url;
+                    a.target = '_blank';
+                    a.rel = 'noopener';
+                } else {
+                    return;
+                }
+                code.parentNode.insertBefore(a, code);
+                a.appendChild(code);
+            });
+        }
+
+        function copyText(text) {
+            if (navigator.clipboard && window.isSecureContext) return navigator.clipboard.writeText(text);
+            // Plain-http pages (another machine on the LAN) have no clipboard API.
+            const area = document.createElement('textarea');
+            area.value = text;
+            area.setAttribute('readonly', '');
+            area.style.position = 'fixed';
+            area.style.opacity = '0';
+            document.body.appendChild(area);
+            area.select();
+            try { document.execCommand('copy'); } finally { area.remove(); }
+            return Promise.resolve();
+        }
+
+        function chatActionButton(icon, label, onClick) {
+            const btn = document.createElement('button');
+            btn.type = 'button';
+            btn.className = 'chat-action';
+            btn.title = label;
+            btn.setAttribute('aria-label', label);
+            btn.innerHTML = CHAT_ICONS[icon] + '<span>' + escapeHtml(label) + '</span>';
+            btn.addEventListener('click', onClick);
+            return btn;
+        }
+
+        function chatCopyButton(text) {
+            const btn = chatActionButton('copy', 'Copy', function() {
+                copyText(text).then(function() {
+                    btn.innerHTML = CHAT_ICONS.check + '<span>Copied</span>';
+                    setTimeout(function() { btn.innerHTML = CHAT_ICONS.copy + '<span>Copy</span>'; }, 1500);
+                });
+            });
+            return btn;
+        }
+
+        // The question an answer, error or "stopped" note belongs to.
+        function chatQuestionIndex(index) {
+            for (let i = index; i >= 0; i--) {
+                if (chatState.messages[i].role === 'user') return i;
+            }
+            return -1;
+        }
+
+        // Turns the server remembers before message `index` (sent as keep_turns, so
+        // an edited or retried question forgets the answers that came after it).
+        function chatTurnsBefore(index) {
+            for (let i = index - 1; i >= 0; i--) {
+                const m = chatState.messages[i];
+                if (m.role === 'assistant' && typeof m.turns === 'number') return m.turns;
+            }
+            return 0;
+        }
+
+        function retryChat(index) {
+            const q = chatQuestionIndex(index);
+            if (q >= 0) askChat(chatState.messages[q].text, q);
+        }
+
+        function renderChatEditor(index) {
+            const msg = chatState.messages[index];
+            const box = document.createElement('div');
+            box.className = 'chat-edit';
+            const area = document.createElement('textarea');
+            area.className = 'chat-input';
+            area.value = msg.text;
+            area.rows = 3;
+            area.setAttribute('aria-label', 'Edit your question');
+            const row = document.createElement('div');
+            row.className = 'chat-edit-actions';
+            const cancel = document.createElement('button');
+            cancel.type = 'button';
+            cancel.className = 'chat-new';
+            cancel.textContent = 'Cancel';
+            cancel.addEventListener('click', cancelChatEdit);
+            const send = document.createElement('button');
+            send.type = 'button';
+            send.className = 'chat-send';
+            send.textContent = 'Send';
+            send.addEventListener('click', function() {
+                if (!area.value.trim()) return;
+                chatEditing = null;
+                askChat(area.value, index);
+            });
+            area.addEventListener('keydown', function(e) {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                    e.preventDefault();
+                    send.click();
+                }
+            });
+            row.appendChild(cancel);
+            row.appendChild(send);
+            box.appendChild(area);
+            box.appendChild(row);
+            return box;
+        }
+
+        function cancelChatEdit() {
+            chatEditing = null;
+            renderChat();
+            document.getElementById('chat-input').focus();
+        }
+
+        function renderChatMessage(msg, index) {
+            const turn = document.createElement('div');
+            turn.className = 'chat-turn ' + msg.role;
+            if (msg.role === 'user' && chatEditing === index) {
+                turn.appendChild(renderChatEditor(index));
+                return turn;
+            }
+            const el = document.createElement('div');
+            el.className = 'chat-msg ' + msg.role;
+            turn.appendChild(el);
+            const actions = document.createElement('div');
+            actions.className = 'chat-actions';
+            if (msg.role === 'user' || msg.role === 'error' || msg.role === 'notice') {
+                el.textContent = msg.text;
+            } else {
+                el.innerHTML = renderMarkdown(msg.text || '');
+                decorateCitations(el);
+                if (typeof hljs !== 'undefined') {
+                    el.querySelectorAll('pre code[class*="language-"]').forEach(function(block) {
+                        hljs.highlightElement(block);
+                    });
+                }
+                renderChatSources(el, msg);
+            }
+            if (msg.role !== 'notice' && msg.role !== 'error') actions.appendChild(chatCopyButton(msg.text || ''));
+            if (!chatBusy) {
+                if (msg.role === 'user') {
+                    actions.appendChild(chatActionButton('edit', 'Edit', function() {
+                        chatEditing = index;
+                        renderChat();
+                        const area = document.querySelector('#chat-messages .chat-edit textarea');
+                        if (area) {
+                            area.focus();
+                            area.setSelectionRange(area.value.length, area.value.length);
+                        }
+                    }));
+                }
+                actions.appendChild(chatActionButton('retry', 'Retry', function() { retryChat(index); }));
+            }
+            if (actions.children.length) turn.appendChild(actions);
+            return turn;
+        }
+
+        function renderChatSources(el, msg) {
+            if (msg.sources && msg.sources.length) {
+                const box = document.createElement('div');
+                box.className = 'chat-sources';
+                msg.sources.forEach(function(src) {
+                    const chip = document.createElement('a');
+                    chip.className = 'chat-source' + (src.stale ? ' stale' : '');
+                    chip.textContent = src.location;
+                    chip.title = (src.title || src.id) + (src.stale ? ' (doc older than the code)' : '');
+                    const target = linkCitation(src.location);
+                    if (target && target.page) {
+                        chip.href = buildHash(target.page, target.anchor);
+                        chip.addEventListener('click', function(e) {
+                            e.preventDefault();
+                            navigateTo(target.page, target.anchor);
+                        });
+                    } else if (target && target.url) {
+                        chip.href = target.url;
+                        chip.target = '_blank';
+                        chip.rel = 'noopener';
+                    }
+                    box.appendChild(chip);
+                });
+                el.appendChild(box);
+            }
+            if (msg.stats) {
+                const stats = document.createElement('div');
+                stats.className = 'chat-stats';
+                stats.textContent = msg.stats;
+                el.appendChild(stats);
+            }
+        }
+
+        function formatSeconds(ms) {
+            const s = Math.max(0, Math.round(ms / 1000));
+            return s < 60 ? s + 's' : Math.floor(s / 60) + 'm ' + String(s % 60).padStart(2, '0') + 's';
+        }
+
+        function renderChatProgress() {
+            const now = Date.now();
+            const el = document.createElement('div');
+            el.className = 'chat-progress';
+            el.id = 'chat-progress';
+            const head = document.createElement('div');
+            head.className = 'chat-progress-head';
+            head.innerHTML = '<span class="chat-spinner" aria-hidden="true"></span><strong>Working on your answer</strong>' +
+                '<span class="chat-progress-time">' + formatSeconds(now - chatProgress.start) + '</span>';
+            el.appendChild(head);
+            const list = document.createElement('ol');
+            list.className = 'chat-steps';
+            list.setAttribute('aria-live', 'polite');
+            const steps = chatProgress.steps.length ? chatProgress.steps
+                : [{ text: 'Sending your question…', start: chatProgress.start }];
+            steps.forEach(function(step) {
+                const li = document.createElement('li');
+                const done = step.end !== undefined;
+                li.className = done ? 'done' : 'current';
+                const text = done ? step.text.replace(/…$/, '') : step.text;
+                li.innerHTML = '<span class="chat-step-mark" aria-hidden="true">' + (done ? '✓' : '•') + '</span>' +
+                    '<span class="chat-step-text">' + escapeHtml(text) + '</span>' +
+                    '<span class="chat-step-time">' + formatSeconds((done ? step.end : now) - step.start) + '</span>';
+                list.appendChild(li);
+            });
+            el.appendChild(list);
+            const hint = document.createElement('div');
+            hint.className = 'chat-progress-hint';
+            hint.textContent = 'Each step asks the model, so a step can take a while. ' +
+                'Press Esc to minimize: the answer keeps coming. Stop cancels it.';
+            el.appendChild(hint);
+            return el;
+        }
+
+        function updateChatProgress() {
+            const old = document.getElementById('chat-progress');
+            if (!chatProgress) {
+                if (old) old.remove();
+                return;
+            }
+            const box = document.getElementById('chat-messages');
+            const pinned = box.scrollHeight - box.scrollTop - box.clientHeight < 40;
+            const el = renderChatProgress();
+            if (old) old.replaceWith(el); else box.appendChild(el);
+            if (pinned) box.scrollTop = box.scrollHeight;
+        }
+
+        function renderChat() {
+            const box = document.getElementById('chat-messages');
+            box.innerHTML = '';
+            if (!chatState.messages.length) {
+                const hint = document.createElement('div');
+                hint.className = 'chat-msg assistant';
+                hint.innerHTML = '<p>Ask anything about this codebase: how something works, where it ' +
+                    'lives, or what breaks if you change it. Answers cite the code and pages they use.</p>';
+                box.appendChild(hint);
+            }
+            chatState.messages.forEach(function(m, i) { box.appendChild(renderChatMessage(m, i)); });
+            if (chatProgress) box.appendChild(renderChatProgress());
+            if (chatEditing === null) box.scrollTop = box.scrollHeight;
+            renderMermaidDiagrams(box).then(function() {
+                if (chatEditing === null) box.scrollTop = box.scrollHeight;
+            });
+        }
+
+        function renderChatOffline() {
+            const box = document.getElementById('chat-messages');
+            const port = (CHAT_CONFIG.endpoints && CHAT_CONFIG.endpoints[0] || 'http://127.0.0.1:8765')
+                .replace(/^.*:(\d+).*$/, '$1');
+            const cmd = 'codewiki serve --docs ' + (CHAT_CONFIG.docs_hint || 'docs') +
+                (port !== '8765' ? ' --port ' + port : '');
+            const safari = /^((?!chrome|android).)*safari/i.test(navigator.userAgent);
+            box.innerHTML = '<div class="chat-offline">' +
+                '<p><strong>Chat needs CodeWiki running on your machine.</strong> In your checkout of ' +
+                'this repository, run:</p><pre><code>' + escapeHtml(cmd) + '</code></pre>' +
+                '<p>Then reopen this panel. Questions are answered with your own CodeWiki ' +
+                'configuration; no key is stored in this page.</p>' +
+                (safari && location.protocol === 'https:'
+                    ? '<p>Safari blocks this site from reaching your machine. Open the docs from the ' +
+                      'local server instead: <a href="http://127.0.0.1:' + escapeHtml(port) + '/">http://127.0.0.1:' +
+                      escapeHtml(port) + '/</a></p>'
+                    : '') +
+                '</div>';
+            const pre = box.querySelector('pre');
+            if (pre) {
+                const btn = document.createElement('button');
+                btn.type = 'button';
+                btn.className = 'chat-new';
+                btn.textContent = 'Copy';
+                btn.style.marginTop = '6px';
+                btn.addEventListener('click', function() {
+                    copyText(cmd).then(function() { btn.textContent = 'Copied'; });
+                });
+                pre.after(btn);
+            }
+        }
+
+        function setChatStatus(text) {
+            document.getElementById('chat-status').textContent = text || '';
+        }
+
+        function isChatOpen() {
+            return document.getElementById('chat-panel').classList.contains('open');
+        }
+
+        // The send button doubles as Stop; the trigger shows a question still running.
+        function updateChatControls() {
+            const send = document.getElementById('chat-send');
+            send.classList.toggle('stop', chatBusy);
+            send.innerHTML = chatBusy ? CHAT_ICONS.stop + '<span>Stop</span>' : 'Ask';
+            send.setAttribute('aria-label', chatBusy ? 'Stop answering' : 'Ask');
+            const trigger = document.getElementById('chat-trigger');
+            trigger.classList.toggle('busy', chatBusy);
+            trigger.querySelector('.chat-trigger-label').textContent = chatBusy ? 'Thinking…' : 'Ask AI';
+        }
+
+        async function openChat() {
+            const panel = document.getElementById('chat-panel');
+            panel.classList.add('open');
+            panel.setAttribute('aria-hidden', 'false');
+            document.getElementById('chat-trigger').classList.remove('unread');
+            setChatStatus(chatServer ? '' : 'Looking for codewiki serve…');
+            const server = await findChatServer(false);
+            setChatStatus('');
+            if (!server) {
+                renderChatOffline();
+                return;
+            }
+            renderChat();
+            document.getElementById('chat-input').focus();
+        }
+
+        // Minimizes: a question being answered keeps going and is shown on reopening.
+        function closeChat() {
+            const panel = document.getElementById('chat-panel');
+            if (panel.contains(document.activeElement)) document.getElementById('chat-trigger').focus();
+            panel.classList.remove('open');
+            panel.setAttribute('aria-hidden', 'true');
+        }
+
+        function stopChat() {
+            if (chatAbort) chatAbort.abort();
+        }
+
+        // Ask `question` in place of the messages from `cutAt` on (an edit or a
+        // retry); a new question is asked at the end of the conversation.
+        async function askChat(question, cutAt) {
+            if (chatBusy || !question.trim()) return;
+            const server = await findChatServer(false);
+            if (!server) {
+                renderChatOffline();
+                return;
+            }
+            if (cutAt === undefined) cutAt = chatState.messages.length;
+            const keepTurns = chatTurnsBefore(cutAt);
+            chatState.messages = chatState.messages.slice(0, cutAt);
+            chatState.messages.push({ role: 'user', text: question });
+            // "New" replaces chatState; what this question returns then goes nowhere.
+            const convo = chatState;
+            chatEditing = null;
+            chatBusy = true;
+            chatAbort = new AbortController();
+            chatProgress = { start: Date.now(), steps: [] };
+            chatTimer = setInterval(updateChatProgress, 1000);
+            updateChatControls();
+            renderChat();
+            try {
+                const response = await fetch(server.base + '/api/ask', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        question: question,
+                        session_id: chatState.sessionId,
+                        keep_turns: keepTurns
+                    }),
+                    signal: chatAbort.signal
+                });
+                if (!response.ok) {
+                    let detail = response.statusText;
+                    try { detail = (await response.json()).detail || detail; } catch (e) { }
+                    throw new Error(detail);
+                }
+                const reader = response.body.getReader();
+                const decoder = new TextDecoder();
+                let buffer = '';
+                let finished = false;
+                while (!finished) {
+                    const chunk = await reader.read();
+                    if (chunk.done) break;
+                    buffer += decoder.decode(chunk.value, { stream: true });
+                    let nl;
+                    while ((nl = buffer.indexOf('\n')) >= 0) {
+                        const line = buffer.slice(0, nl).trim();
+                        buffer = buffer.slice(nl + 1);
+                        if (!line) continue;
+                        const event = JSON.parse(line);
+                        if (event.type === 'status') {
+                            const now = Date.now();
+                            const steps = chatProgress.steps;
+                            if (steps.length) steps[steps.length - 1].end = now;
+                            steps.push({ text: event.message, start: now });
+                            updateChatProgress();
+                        } else if (event.type === 'answer') {
+                            convo.sessionId = event.session_id;
+                            convo.messages.push({
+                                role: 'assistant',
+                                text: event.answer,
+                                sources: event.sources,
+                                stats: event.stats.footer,
+                                turns: event.turns
+                            });
+                            finished = true;
+                        } else if (event.type === 'error') {
+                            throw new Error(event.message);
+                        }
+                    }
+                }
+                if (!finished) throw new Error('the server closed the connection without an answer');
+            } catch (e) {
+                if (e.name === 'AbortError') {
+                    convo.messages.push({ role: 'notice', text: 'Stopped. Edit or retry the question to ask again.' });
+                } else {
+                    convo.messages.push({ role: 'error', text: 'Could not answer: ' + e.message });
+                }
+            } finally {
+                clearInterval(chatTimer);
+                chatTimer = null;
+                chatBusy = false;
+                chatAbort = null;
+                chatProgress = null;
+                updateChatControls();
+                chatSaveState();
+                renderChat();
+                if (!isChatOpen() && chatState === convo) {
+                    document.getElementById('chat-trigger').classList.add('unread');
+                }
+            }
+        }
+
+        function setupChat() {
+            chatLoadState();
+            document.getElementById('chat-trigger').addEventListener('click', openChat);
+            document.getElementById('chat-close').addEventListener('click', closeChat);
+            document.getElementById('chat-new').addEventListener('click', function() {
+                stopChat();
+                chatEditing = null;
+                chatState = { sessionId: null, messages: [] };
+                chatSaveState();
+                if (chatServer) renderChat();
+            });
+            const input = document.getElementById('chat-input');
+            document.getElementById('chat-form').addEventListener('submit', function(e) {
+                e.preventDefault();
+                if (chatBusy) {
+                    stopChat();
+                    return;
+                }
+                const q = input.value;
+                if (!q.trim()) return;
+                input.value = '';
+                askChat(q);
+            });
+            input.addEventListener('keydown', function(e) {
+                // Enter never stops a running answer: only the Stop button does.
+                if (e.key === 'Enter' && !e.shiftKey) {
+                    e.preventDefault();
+                    if (!chatBusy) document.getElementById('chat-form').requestSubmit();
+                }
+            });
+            // Capture phase: Esc minimizes from anywhere in the panel, whatever has focus,
+            // unless a diagram or the search box is open on top of it.
+            document.addEventListener('keydown', function(e) {
+                if (e.key !== 'Escape' || !isChatOpen()) return;
+                if (lightboxEl && lightboxEl.classList.contains('open')) return;
+                if (document.getElementById('search-modal-backdrop').classList.contains('open')) return;
+                e.preventDefault();
+                if (chatEditing !== null) cancelChatEdit(); else closeChat();
+            }, true);
+            // Only same-origin is probed up front (served by `codewiki serve`): a page on
+            // GitHub Pages reaches for localhost only once the reader opens the chat.
+            findChatServer(true).then(function(server) {
+                if (server && currentFile) showStaleBanner(currentFile);
+            });
         }
 
         // ---------- Utilities ----------

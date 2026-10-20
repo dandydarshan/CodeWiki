@@ -299,6 +299,152 @@ def _fine_grained_tools() -> list[Tool]:
     ]
 
 
+_DOCS_DIR_PROP = {
+    "type": "string",
+    "description": (
+        "Generated docs folder (default: $CODEWIKI_DOCS_DIR, else ./docs in the working dir)"
+    ),
+}
+
+
+def _qa_tools() -> list[Tool]:
+    """Question answering over generated docs + source code."""
+    return [
+        Tool(
+            name="codewiki_search",
+            description=(
+                "Find where something is documented or implemented. Searches the generated "
+                "CodeWiki docs (one entry per section) and every code component (functions, "
+                "classes, methods, config files) and returns one compact line each: id, kind, "
+                "title or signature, location, ~tokens to read, short snippet. No LLM, cheap. "
+                "Use this instead of opening whole files, then codewiki_read only the ids you need."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "Words, identifiers or a question"},
+                    "k": {"type": "integer", "description": "Results (default 10, max 50)"},
+                    "kinds": {
+                        "type": "string",
+                        "enum": ["all", "docs", "code"],
+                        "description": "Restrict to doc sections or code (default all)",
+                    },
+                    "docs_dir": _DOCS_DIR_PROP,
+                },
+                "required": ["query"],
+            },
+        ),
+        Tool(
+            name="codewiki_read",
+            description=(
+                "Read exact doc sections and component source by id (from codewiki_search), "
+                "within a token budget: only the section or function/class body, never the "
+                "whole file. Code is the current working tree; doc sections are flagged when "
+                "the code they describe changed since the docs were generated. Lists related "
+                "ids (callees, callers, documenting pages) for the next hop."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "ids": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Ids from codewiki_search, e.g. 'pkg/mod.py::Class.method' "
+                        "or 'Module.md#section'",
+                    },
+                    "max_tokens": {
+                        "type": "integer",
+                        "description": "Budget for the returned text (default 4000, max 20000)",
+                    },
+                    "query": {
+                        "type": "string",
+                        "description": "What you are looking for: a unit over the budget is cut "
+                        "to the lines that match it instead of to its beginning",
+                    },
+                    "docs_dir": _DOCS_DIR_PROP,
+                },
+                "required": ["ids"],
+            },
+        ),
+        Tool(
+            name="codewiki_impact",
+            description=(
+                "What does changing, renaming or removing a symbol affect? Pass a variable, "
+                "constant, parameter (Class.method.param), function or class. Returns every "
+                "definition and usage site in the current code labelled from the AST "
+                "(read/write/keyword arg/import/re-export), the functions containing them, their "
+                "callers two hops out, tests that touch it, public-API exposure and dynamic "
+                "access static analysis cannot see. Same-named locals and comment mentions are "
+                "listed separately. No LLM."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "symbol": {
+                        "type": "string",
+                        "description": "e.g. MAX_AGE, Signer.unsign, TimestampSigner.unsign.max_age",
+                    },
+                    "file": {
+                        "type": "string",
+                        "description": "Repo-relative file that defines it (narrows parameters)",
+                    },
+                    "change": {
+                        "type": "string",
+                        "enum": ["rename", "remove", "modify"],
+                        "description": "The planned change (default modify)",
+                    },
+                    "docs_dir": _DOCS_DIR_PROP,
+                },
+                "required": ["symbol"],
+            },
+        ),
+        Tool(
+            name="codewiki_ask",
+            description=(
+                "Answer a question about the codebase with citations, using CodeWiki's own LLM "
+                "(the provider set with `codewiki config set`). It searches the docs and code, "
+                "picks what to read from metadata, reads only those sections and function "
+                "bodies within a token budget, and answers with file:line citations plus stats "
+                "(time, LLM calls, tokens). Change-impact questions use codewiki_impact "
+                "internally. Pass session_id from a previous answer for follow-ups. Prefer "
+                "codewiki_search + codewiki_read when you can reason over the code yourself."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "question": {"type": "string", "description": "The question"},
+                    "session_id": {
+                        "type": "string",
+                        "description": "From an earlier answer, for follow-up questions",
+                    },
+                    "max_context_tokens": {
+                        "type": "integer",
+                        "description": "Cap on code/doc tokens given to the answering model",
+                    },
+                    "docs_dir": _DOCS_DIR_PROP,
+                },
+                "required": ["question"],
+            },
+        ),
+        Tool(
+            name="codewiki_outline",
+            description=(
+                "The documentation's module tree with a one-line summary per module page: a "
+                "cheap map of the codebase for orientation. No LLM."
+            ),
+            inputSchema={"type": "object", "properties": {"docs_dir": _DOCS_DIR_PROP}},
+        ),
+        Tool(
+            name="codewiki_status",
+            description=(
+                "Are the docs up to date with the code? Shows the commit the docs were generated "
+                "at, commits since, files changed, and pages that are stale. No LLM."
+            ),
+            inputSchema={"type": "object", "properties": {"docs_dir": _DOCS_DIR_PROP}},
+        ),
+    ]
+
+
 def _legacy_tools() -> list[Tool]:
     """Return the legacy tools that require CodeWiki LLM configuration."""
     return [
@@ -378,10 +524,19 @@ def _legacy_tools() -> list[Tool]:
 @server.list_tools()
 async def list_tools() -> list[Tool]:
     """List all available CodeWiki MCP tools."""
-    return _fine_grained_tools() + _legacy_tools()
+    return _fine_grained_tools() + _qa_tools() + _legacy_tools()
 
 
 _analyze_lock = asyncio.Lock()
+
+_QA_HANDLERS = {
+    "codewiki_search": "handle_search",
+    "codewiki_read": "handle_read",
+    "codewiki_outline": "handle_outline",
+    "codewiki_status": "handle_status",
+    "codewiki_impact": "handle_impact",
+    "codewiki_ask": "handle_ask",
+}
 
 
 @server.call_tool()
@@ -401,6 +556,12 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
             # threads at once and the job is heavy anyway.
             async with _analyze_lock:
                 return [_text(await asyncio.to_thread(handle_analyze_repo, arguments, _store))]
+
+        elif name in _QA_HANDLERS:
+            from codewiki.mcp.tools import qa as qa_tools
+
+            handler = getattr(qa_tools, _QA_HANDLERS[name])
+            return [_text(await asyncio.to_thread(handler, arguments))]
 
         elif name == "read_code_components":
             from codewiki.mcp.tools.code_reader import handle_read_code_components

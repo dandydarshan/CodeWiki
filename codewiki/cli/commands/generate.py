@@ -26,7 +26,7 @@ from codewiki.cli.utils.errors import (
 from codewiki.cli.utils.instructions import display_post_generation_instructions
 from codewiki.cli.utils.logging import create_logger
 from codewiki.src.be.doc_layout import find_doc, list_doc_files, read_layout, remove_doc
-from codewiki.src.config import DEFAULT_LAYOUT, LAYOUT_FLAT
+from codewiki.src.config import DEFAULT_CONCURRENCY, DEFAULT_LAYOUT, LAYOUT_FLAT
 from codewiki.src.language import resolve_update_language
 from codewiki.cli.utils.repo_validator import (
     check_writable_output,
@@ -327,6 +327,15 @@ def _invalidate_affected_modules(output_dir: Path, changed_files: list[str], log
     help="Maximum model requests per agent run (overrides config)",
 )
 @click.option(
+    "--concurrency",
+    type=click.IntRange(min=1),
+    default=None,
+    help=(
+        f"Module agents to run at the same time (overrides config; default {DEFAULT_CONCURRENCY}). "
+        "With --update, changed leaves still run one at a time; only missing pages run in parallel."
+    ),
+)
+@click.option(
     "--agent-retries",
     type=click.IntRange(min=0),
     default=None,
@@ -344,6 +353,21 @@ def _invalidate_affected_modules(output_dir: Path, changed_files: list[str], log
     default=None,
     help="Add prompt-cache breakpoints to agentic LLM calls; auto-falls back to "
     "normal calls if the provider rejects them (default: enabled)",
+)
+@click.option(
+    "--main-model",
+    default=None,
+    help="Model for documentation agents (overrides config)",
+)
+@click.option(
+    "--cluster-model",
+    default=None,
+    help="Model for module clustering (overrides config)",
+)
+@click.option(
+    "--fallback-model",
+    default=None,
+    help="Model used when the main model fails (overrides config)",
 )
 @click.option(
     "--artifacts/--no-artifacts",
@@ -466,8 +490,12 @@ def generate_command(
     max_depth: int | None,
     request_limit: int | None,
     agent_retries: int | None,
+    concurrency: int | None,
     max_context_tokens: int | None,
     prompt_caching: bool | None,
+    main_model: str | None = None,
+    cluster_model: str | None = None,
+    fallback_model: str | None = None,
     artifacts: bool = True,
     crosslinks: bool = True,
     artifact_token_budget: int = 200_000,
@@ -533,6 +561,10 @@ def generate_command(
     \b
     # Override max depth for hierarchical decomposition
     $ codewiki generate --max-depth 3
+
+    \b
+    # Use other models for this generation
+    $ codewiki generate --main-model claude-haiku-5-5 --cluster-model claude-haiku-5-5
     """
     print_banner()
     logger = create_logger(verbose=verbose)
@@ -739,10 +771,15 @@ def generate_command(
             effective_prompt_caching = (
                 prompt_caching if prompt_caching is not None else config.prompt_caching
             )
+            logger.debug(f"Main model: {main_model or config.main_model}")
+            logger.debug(f"Cluster model: {cluster_model or config.cluster_model}")
             logger.debug(f"Max tokens: {effective_max_tokens}")
             logger.debug(f"Max token/module: {effective_max_token_per_module}")
             logger.debug(f"Max token/leaf module: {effective_max_token_per_leaf}")
             logger.debug(f"Max depth: {effective_max_depth}")
+            logger.debug(
+                f"Concurrency: {concurrency if concurrency is not None else config.concurrency}"
+            )
             logger.debug(f"Use gitignore: {effective_use_gitignore}")
             logger.debug(f"Prompt caching: {effective_prompt_caching}")
             logger.debug(
@@ -776,9 +813,10 @@ def generate_command(
             repo_path=repo_path,
             output_dir=output_dir,
             config={
-                "main_model": config.main_model,
-                "cluster_model": config.cluster_model,
-                "fallback_model": config.fallback_model,
+                # Models (runtime overrides take precedence)
+                "main_model": main_model or config.main_model,
+                "cluster_model": cluster_model or config.cluster_model,
+                "fallback_model": fallback_model or config.fallback_model,
                 "base_url": config.base_url,
                 "api_key": api_key,
                 "provider": getattr(config, "provider", "openai-compatible"),
@@ -801,6 +839,9 @@ def generate_command(
                 "agent_retries": agent_retries
                 if agent_retries is not None
                 else config.agent_retries,
+                "concurrency": concurrency
+                if concurrency is not None
+                else getattr(config, "concurrency", DEFAULT_CONCURRENCY),
                 "max_context_tokens": max_context_tokens
                 if max_context_tokens is not None
                 else config.max_context_tokens,
@@ -870,6 +911,10 @@ def generate_command(
                 "total_files_analyzed": job.statistics.total_files_analyzed,
                 "generation_time": generation_time,
                 "total_tokens_used": job.statistics.total_tokens_used,
+                "usage_totals": job.statistics.usage_totals,
+                "total_cost_usd": job.statistics.total_cost_usd,
+                "unpriced_models": job.statistics.unpriced_models,
+                "provider": getattr(config, "provider", "openai-compatible"),
             },
         )
 

@@ -31,10 +31,11 @@ from codewiki.src.be.prompt_template import (
     format_system_prompt,
     format_user_prompt,
 )
-from codewiki.src.be.utils import is_complex_module
+from codewiki.src.be.cluster_modules import format_potential_core_components
+from codewiki.src.be.generation_progress import progress_of
+from codewiki.src.be.utils import count_tokens, is_complex_module
 from codewiki.src.be.doc_layout import config_layout, find_doc
 from codewiki.src.config import MODULE_TREE_FILENAME, OVERVIEW_FILENAME, Config
-from codewiki.src.utils import file_manager
 
 logger = logging.getLogger(__name__)
 
@@ -66,10 +67,18 @@ class PydanticAIBackend(LLMBackend):
         *,
         model: str | None = None,
         system_prompt: str | None = None,
+        allow_tools: bool = True,  # API completions never use tools
     ) -> str:
         pop_last_usage()
+        started = time.time()
         result = call_llm(prompt, self._config, model=model, system_prompt=system_prompt)
-        self.last_usage = pop_last_usage()
+        self._record_usage(
+            "complete",
+            "",
+            pop_last_usage(),
+            seconds=time.time() - started,
+            model=model or self._config.main_model,
+        )
         return result
 
     async def run_update_agent(
@@ -93,8 +102,13 @@ class PydanticAIBackend(LLMBackend):
             usage_limits=UsageLimits(request_limit=self._config.request_limit),
         )
         seconds = time.time() - started
-        usage = _run_usage(result)
-        self.last_usage = usage
+        usage = self._record_usage(
+            "update_agent",
+            deps.current_module_name,
+            _run_usage(result),
+            seconds=seconds,
+            model=self._config.main_model,
+        )
         text = result.output if isinstance(result.output, str) else str(result.output)
         return AgentReply(text=text, usage=usage, seconds=seconds)
 
@@ -108,7 +122,8 @@ class PydanticAIBackend(LLMBackend):
     ) -> dict[str, Any]:
         config = self._config
         module_tree_path = os.path.join(working_dir, MODULE_TREE_FILENAME)
-        module_tree = file_manager.load_json(module_tree_path)
+        shared = self.module_tree
+        module_tree = shared.get(module_tree_path)
 
         # overview.md is the root module's own doc (renamed from
         # {repo_name}.md), so its presence only proves the root is done —
@@ -126,7 +141,17 @@ class PydanticAIBackend(LLMBackend):
             logger.info("✓ Module docs already exists at %s", docs_path)
             return module_tree
 
-        if is_complex_module(components, core_component_ids):
+        # Same gate as CawBackend and the sub-module tool: delegating to
+        # sub-agents only pays off for a multi-file module with enough code
+        # and recursion budget left. Without the token check every multi-file
+        # module fanned out, even ones a single leaf page covers.
+        _, components_with_code = format_potential_core_components(core_component_ids, components)
+        can_delegate = (
+            is_complex_module(components, core_component_ids)
+            and 1 < config.max_depth
+            and count_tokens(components_with_code) >= config.max_token_per_leaf_module
+        )
+        if can_delegate:
             agent = Agent(
                 self._fallback_models,
                 name=module_name,
@@ -165,23 +190,35 @@ class PydanticAIBackend(LLMBackend):
             current_depth=1,
             config=config,
             custom_instructions=self._custom_instructions,
+            slots=self.slots,
+            progress=progress_of(self),
         )
 
+        started = time.time()
         try:
-            result = await agent.run(
-                format_user_prompt(
-                    module_name=module_name,
-                    core_component_ids=core_component_ids,
-                    components=components,
-                    module_tree=deps.module_tree,
-                    module_path=module_path,
-                    layout=config_layout(config),
-                ),
-                deps=deps,
-                usage_limits=UsageLimits(request_limit=config.request_limit),
+            async with self.slots.hold_async():
+                result = await agent.run(
+                    format_user_prompt(
+                        module_name=module_name,
+                        core_component_ids=core_component_ids,
+                        components=components,
+                        module_tree=deps.module_tree,
+                        module_path=module_path,
+                        layout=config_layout(config),
+                    ),
+                    deps=deps,
+                    usage_limits=UsageLimits(request_limit=config.request_limit),
+                )
+            # Covers this module's own run; pydantic-ai sub-module agents run
+            # with their own usage and are not counted here.
+            self._record_usage(
+                "module_agent",
+                module_name,
+                _run_usage(result),
+                seconds=time.time() - started,
+                model=config.main_model,
             )
-            self.last_usage = _run_usage(result)
-            file_manager.save_json(deps.module_tree, module_tree_path)
+            shared.save(module_tree_path, deps.module_tree)
             return deps.module_tree
         except Exception as e:
             logger.error("Error processing module %s: %s", module_name, e)

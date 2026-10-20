@@ -20,8 +20,12 @@ ignored (caw has no built-in fallback chain).
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import json
 import logging
 import os
+import subprocess
+import tempfile
 import time
 import shutil
 from typing import Any
@@ -30,7 +34,7 @@ from codewiki._vendor.caw import Agent as CawAgent
 from codewiki._vendor.caw import ToolGroup
 
 from codewiki.src.be.agent_tools.deps import CodeWikiDeps
-from codewiki.src.be.backend import AgentReply, LLMBackend, usage_to_dict
+from codewiki.src.be.backend import AgentReply, LLMBackend
 from codewiki.src.be.cluster_modules import format_potential_core_components
 from codewiki.src.be.dependency_analyzer.models.core import Node
 from codewiki.src.be.prompt_template import (
@@ -39,7 +43,7 @@ from codewiki.src.be.prompt_template import (
     format_user_prompt,
 )
 from codewiki.src.be.utils import count_tokens, is_complex_module, set_main_loop
-from codewiki.src.be.doc_layout import config_layout, find_doc
+from codewiki.src.be.doc_layout import config_layout, find_doc, module_doc_file
 from codewiki.src.config import MODULE_TREE_FILENAME, OVERVIEW_FILENAME, Config
 from codewiki.src.utils import file_manager
 
@@ -206,6 +210,55 @@ _patch_claude_allowed_tools()
 # --- end stopgap --------------------------------------------------------------
 
 
+# Below this a final reply is a status note ("Done."), not a page.
+_MIN_FALLBACK_DOC_CHARS = 500
+
+
+def save_unwritten_doc(docs_path: str, final_text: str | None, module_name: str) -> bool:
+    """Save the agent's final reply as the module page if it never wrote one.
+
+    Subscription CLIs sometimes answer with the whole page as their final
+    message instead of calling str_replace_editor, so the run "completes"
+    with no file and generation then fails on the missing doc. Only a reply
+    that looks like a page (a ``#`` heading, substantial length) is saved;
+    anything else is left for the missing-docs check to report.
+    """
+    if os.path.exists(docs_path) or not final_text:
+        return False
+    lines = final_text.strip().splitlines()
+    start = next((i for i, line in enumerate(lines) if line.startswith("# ")), None)
+    if start is None:
+        return False
+    content = "\n".join(lines[start:]).strip()
+    if len(content) < _MIN_FALLBACK_DOC_CHARS:
+        return False
+    logger.warning(
+        "Module %s finished without writing %s; saving its final reply as the page.",
+        module_name,
+        docs_path,
+    )
+    os.makedirs(os.path.dirname(docs_path), exist_ok=True)
+    file_manager.save_text(content + "\n", docs_path)
+    return True
+
+
+def neutral_cwd() -> str:
+    """An empty working directory for prompt-only CLI calls.
+
+    The CLIs load project context from their working directory (claude:
+    CLAUDE.md and the project's auto-memory). A prompt-only call must see
+    just its prompt, not whatever project the user's shell is in.
+    """
+    path = os.path.join(tempfile.gettempdir(), "codewiki-plain-completion")
+    os.makedirs(path, exist_ok=True)
+    return path
+
+
+# A prompt-only answer takes well under a minute; a CLI that is still running
+# after this is stuck (e.g. a wrapper script waiting on something).
+_PLAIN_TIMEOUT_SEC = 300
+
+
 class CawBackend(LLMBackend):
     """Routes LLM operations through the claude / codex CLI subscription."""
 
@@ -214,9 +267,7 @@ class CawBackend(LLMBackend):
         self._caw_provider = _resolve_caw_provider(config.provider)
         # main_model is passed straight through; empty string → caw default.
         self._model: str | None = config.main_model or None
-        # Resolve once, before any agent-run chdir can move the cwd —
-        # os.path.abspath is cwd-relative and _run_module_agent_sync recurses
-        # (via generate_sub_module_documentation) while the cwd is pinned.
+        # Resolve once: os.path.abspath is cwd-relative.
         self._repo_root = str(os.path.abspath(config.repo_path))
 
         # Fail loudly here rather than producing a confusing caw error mid-run.
@@ -248,21 +299,106 @@ class CawBackend(LLMBackend):
         *,
         model: str | None = None,
         system_prompt: str | None = None,
+        allow_tools: bool = True,
     ) -> str:
         # Blocks the calling thread for the lifetime of the claude/codex
         # subprocess.  Callers running this from an async context (e.g. the
         # documentation_generator) accept this — there is no concurrent work
         # to do while clustering is in flight anyway.
         effective_model = model or self._model
+        if not allow_tools and self._caw_provider == "claude_code":
+            return self._plain_claude_completion(prompt, system_prompt, effective_model)
         agent = CawAgent(
             provider=self._caw_provider,
             model=effective_model,
-            tools=ToolGroup.READER,
+            # caw rejects an empty tool set; INTERACTION alone (AskUserQuestion,
+            # unusable in -p) leaves no file, shell or web access.
+            tools=ToolGroup.READER if allow_tools else ToolGroup.INTERACTION,
             system_prompt=system_prompt,
         )
-        traj = agent.completion(prompt)
-        self.last_usage = usage_to_dict(getattr(traj, "total_usage", None))
+        started = time.time()
+        if allow_tools:
+            traj = agent.completion(prompt)
+        else:
+            traj = agent.completion(prompt, cwd=neutral_cwd())
+        self._record_usage(
+            "complete",
+            "",
+            getattr(traj, "total_usage", None),
+            seconds=time.time() - started,
+            model=getattr(traj, "model", None) or effective_model,
+        )
         return traj.result
+
+    def _plain_claude_completion(
+        self, prompt: str, system_prompt: str | None, model: str | None
+    ) -> str:
+        """``claude -p`` with no tools, no MCP servers and a neutral cwd.
+
+        caw cannot pass these flags. Without them every call also carries
+        Claude Code's tool definitions and the user's MCP servers: ~17k
+        prompt tokens of overhead against ~500 (measured), plus the
+        project memory of whatever directory the shell is in.
+        """
+        started = time.time()
+        cmd = [
+            "claude",
+            "-p",
+            "--output-format",
+            "json",
+            "--tools",
+            "",
+            "--strict-mcp-config",
+        ]
+        if model:
+            cmd += ["--model", model]
+        if system_prompt:
+            cmd += ["--system-prompt", system_prompt]
+        try:
+            proc = subprocess.run(  # noqa: S603 — fixed argv, prompt on stdin
+                cmd,
+                input=prompt,
+                capture_output=True,
+                text=True,
+                cwd=neutral_cwd(),
+                timeout=_PLAIN_TIMEOUT_SEC,
+                check=False,
+            )
+        except subprocess.TimeoutExpired as e:
+            raise RuntimeError(
+                f"claude did not answer within {_PLAIN_TIMEOUT_SEC}s. Check that "
+                "`claude -p hello` works from this process's environment (an MCP client "
+                "may start CodeWiki with a reduced PATH/environment)."
+            ) from e
+        data = None
+        for line in reversed(proc.stdout.splitlines()):  # shims may print before the JSON
+            if line.startswith("{"):
+                try:
+                    data = json.loads(line)
+                    break
+                except ValueError:
+                    continue
+        if data is None:
+            tail = (proc.stderr or proc.stdout or "").strip()[-500:]
+            raise RuntimeError(f"claude returned no result (exit {proc.returncode}): {tail}")
+        usage = data.get("usage") or {}
+        self._record_usage(
+            "complete",
+            "",
+            {
+                "input_tokens": usage.get("input_tokens") or 0,
+                "output_tokens": usage.get("output_tokens") or 0,
+                "cache_read_tokens": usage.get("cache_read_input_tokens") or 0,
+                "cache_write_tokens": usage.get("cache_creation_input_tokens") or 0,
+                "cost_usd": data.get("total_cost_usd") or 0.0,
+            },
+            seconds=time.time() - started,
+            model=model,
+        )
+        result = data.get("result") or ""
+        if data.get("is_error"):
+            raise RuntimeError(f"claude: {result or data.get('subtype') or 'error'}")
+        return result
 
     # ------------------------------------------------------------------
     # Update agent (incremental updater): read tools + str_replace_editor,
@@ -293,24 +429,25 @@ class CawBackend(LLMBackend):
             tools=_agent_tool_group_for_provider(self._caw_provider),
             tool_servers=[toolkit],
         )
-        original_cwd = os.getcwd()
         run_cwd = deps.absolute_docs_path if self._caw_provider == "codex" else self._repo_root
         started = time.time()
         try:
-            os.chdir(run_cwd)
-            try:
-                traj = agent.completion(user_prompt)
-            finally:
-                os.chdir(original_cwd)
+            traj = agent.completion(user_prompt, cwd=run_cwd)
         except Exception as e:
             logger.error("Update agent for %s failed via caw: %s", deps.current_module_name, e)
             raise
-        usage = usage_to_dict(getattr(traj, "total_usage", None))
-        self.last_usage = usage
+        seconds = time.time() - started
+        usage = self._record_usage(
+            "update_agent",
+            deps.current_module_name,
+            getattr(traj, "total_usage", None),
+            seconds=seconds,
+            model=getattr(traj, "model", None) or self._model,
+        )
         return AgentReply(
             text=traj.result or "",
             usage=usage,
-            seconds=time.time() - started,
+            seconds=seconds,
             meta={"turns": traj.num_turns, "tool_calls": traj.total_tool_calls},
         )
 
@@ -336,14 +473,16 @@ class CawBackend(LLMBackend):
         # Hand the main loop to utils so the worker-thread tool calls can
         # marshal parse_mermaid_py back here.
         set_main_loop(asyncio.get_running_loop())
-        return await asyncio.to_thread(
-            self._run_module_agent_sync,
-            module_name,
-            components,
-            core_component_ids,
-            module_path,
-            working_dir,
-        )
+        async with self.slots.hold_async():
+            return await asyncio.to_thread(
+                self._run_module_agent_sync,
+                module_name,
+                components,
+                core_component_ids,
+                module_path,
+                working_dir,
+                hold_slot=False,
+            )
 
     def _run_module_agent_sync(
         self,
@@ -354,6 +493,7 @@ class CawBackend(LLMBackend):
         working_dir: str,
         start_depth: int = 1,
         module_tree: dict[str, Any] | None = None,
+        hold_slot: bool = True,
     ) -> dict[str, Any]:
         # ``start_depth`` lets the recursion preserve max_depth across nested
         # _run_module_agent_sync calls — each fresh deps object would otherwise
@@ -362,12 +502,15 @@ class CawBackend(LLMBackend):
         # recursion.  Reloading from disk only works at the top level — by the
         # time a sub-agent runs, the parent has staged new branches in memory
         # but has not yet saved (save happens after agent.completion returns).
+        # ``hold_slot`` is False when the caller already holds a concurrency
+        # slot for this session (run_module_agent).
         from codewiki.src.be.caw_toolkit import CawToolKit  # local import to avoid cycles
 
         config = self._config
         module_tree_path = os.path.join(working_dir, MODULE_TREE_FILENAME)
+        shared = self.module_tree
         if module_tree is None:
-            module_tree = file_manager.load_json(module_tree_path)
+            module_tree = shared.get(module_tree_path)
 
         # overview.md is the root module's own doc (renamed from
         # {repo_name}.md), so its presence only proves the root is done —
@@ -378,7 +521,8 @@ class CawBackend(LLMBackend):
             if os.path.exists(overview_docs_path):
                 logger.info("✓ Overview docs already exists at %s", overview_docs_path)
                 return module_tree
-        docs_path = find_doc(working_dir, module_name, module_tree) if module_path else None
+        with shared.lock:
+            docs_path = find_doc(working_dir, module_name, module_tree) if module_path else None
         if docs_path is None:
             docs_path = os.path.join(working_dir, f"{module_name}.md")
         if os.path.exists(docs_path):
@@ -439,66 +583,55 @@ class CawBackend(LLMBackend):
             tool_servers=[toolkit],
         )
 
-        user_prompt = format_user_prompt(
-            module_name=module_name,
-            core_component_ids=core_component_ids,
-            components=components,
-            module_tree=deps.module_tree,
-            module_path=list(module_path),
-            layout=config_layout(config),
-        )
+        with shared.lock:
+            user_prompt = format_user_prompt(
+                module_name=module_name,
+                core_component_ids=core_component_ids,
+                components=components,
+                module_tree=deps.module_tree,
+                module_path=list(module_path),
+                layout=config_layout(config),
+            )
 
-        # caw forks claude / codex via subprocess.Popen without a cwd, so the
-        # child CLI inherits Python's cwd — typically the repo root where the
-        # user invoked ``codewiki``.  Codex's native ``file_change`` tool
-        # (always present under the danger-full-access sandbox EXEC requires)
-        # then resolves relative paths against that cwd, dropping the .md at
-        # the repo root.  Pin cwd to the docs output dir for the duration of
-        # the agent run so file_change lands inside ``--output``.  Reads still
-        # go through MCP tools that use absolute paths from ``deps``, so
-        # they're cwd-independent.  Safe to mutate process-wide cwd because
-        # documentation_generator processes modules sequentially and recursive
-        # _run_module_agent_sync calls chdir to the same absolute_docs_path.
-        # caw runs claude with `--dangerously-skip-permissions`, expecting
-        # bypassPermissions ("Everything" runs without asking).  But an org
-        # managed policy can DISABLE bypass mode, in which case the flag is
-        # downgraded to `acceptEdits` — observed here: both
-        # `--dangerously-skip-permissions` and `--permission-mode
-        # bypassPermissions` report permissionMode=acceptEdits.
-        #   permission modes: https://code.claude.com/docs/en/permission-modes
-        #   (see #skip-all-checks-with-bypasspermissions-mode and its
-        #    disableBypassPermissionsMode managed setting).
-        # Under acceptEdits, auto-approval is limited to reads/edits INSIDE the
-        # working directory or additionalDirectories; paths outside that scope
-        # still prompt (== denied in non-interactive `-p`):
-        #   https://code.claude.com/docs/en/permission-modes#auto-approve-file-edits-with-acceptedits-mode
-        # caw chdir's into the output subdir (for codex's native file_change),
-        # so the source tree in the PARENT repo is out-of-scope and every
-        # source Read is denied -> empty docs.  claude writes via CodeWiki's
-        # str_replace_editor (absolute deps path), so it does NOT need cwd
-        # pinned to the output dir.  Pin cwd to the repo root so BOTH the source
-        # tree and the output dir fall inside the workspace (alt: --add-dir,
-        # https://code.claude.com/docs/en/cli-reference).  Codex keeps the
-        # output-dir chdir because its file_change resolves relative paths.
-        original_cwd = os.getcwd()
-        if self._caw_provider == "codex":
-            run_cwd = working_dir
-        else:
-            run_cwd = self._repo_root
+        # Each CLI session gets its own cwd (caw passes it to Popen) instead
+        # of a process-wide os.chdir, which concurrent sessions would race on.
+        # Codex: its native file_change resolves relative paths against cwd,
+        # so it runs in the docs dir to land pages inside ``--output``.
+        # Claude: an org policy can downgrade --dangerously-skip-permissions
+        # to acceptEdits, which only auto-approves reads inside the cwd, so it
+        # runs at the repo root to keep the source tree readable
+        # (https://code.claude.com/docs/en/permission-modes).
+        run_cwd = working_dir if self._caw_provider == "codex" else self._repo_root
+        slot = self.slots.hold() if hold_slot else contextlib.nullcontext()
+        started = time.time()
         try:
-            os.chdir(run_cwd)
-            try:
-                traj = agent.completion(user_prompt)
-            finally:
-                os.chdir(original_cwd)
+            with slot:
+                traj = agent.completion(user_prompt, cwd=run_cwd)
+            # Nested sub-module agents are separate CLI processes that record
+            # their own usage, so this covers only this module's own run.
+            usage = self._record_usage(
+                "module_agent",
+                module_name,
+                getattr(traj, "total_usage", None),
+                seconds=time.time() - started,
+                model=getattr(traj, "model", None) or self._model,
+            )
             logger.info(
-                "Module %s completed via caw (turns=%d, tool_calls=%d)",
+                "Module %s completed via caw (turns=%d, tool_calls=%d, cost=$%.4f)",
                 module_name,
                 traj.num_turns,
                 traj.total_tool_calls,
+                (usage or {}).get("cost_usd", 0.0),
             )
-            self.last_usage = usage_to_dict(getattr(traj, "total_usage", None))
-            file_manager.save_json(deps.module_tree, module_tree_path)
+            save_unwritten_doc(
+                os.path.join(
+                    working_dir,
+                    module_doc_file(module_name, list(module_path), config_layout(config)),
+                ),
+                getattr(traj, "result", ""),
+                module_name,
+            )
+            shared.save(module_tree_path, deps.module_tree)
             return deps.module_tree
         except Exception as e:
             logger.error("Error processing module %s via caw: %s", module_name, e)

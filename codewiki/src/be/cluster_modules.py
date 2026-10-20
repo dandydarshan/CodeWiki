@@ -217,8 +217,9 @@ def _directory_modules(
     groups = partition_leaf_nodes_by_structure(
         batch,
         components,
-        lambda ids: get_clustering_input_token_count(ids, components)
-        <= config.max_token_per_module,
+        lambda ids: (
+            get_clustering_input_token_count(ids, components) <= config.max_token_per_module
+        ),
     )
     modules: dict[str, Any] = {}
     for group in groups:
@@ -698,6 +699,14 @@ def super_group_modules(
     if grouping is None:
         return module_tree
 
+    # The prompt lists each module's components under it, and the LLM sometimes
+    # answers with those component ids instead of module names. Map a
+    # component id back to the module that owns it.
+    owner_of: dict[str, str] = {}
+    for name, info in module_tree.items():
+        for component in info.get("components", []):
+            owner_of.setdefault(component, name)
+
     # Validate assignments: unknown modules are dropped, duplicates keep their
     # first assignment, unassigned modules stay at the top level.
     assigned = set()
@@ -712,6 +721,10 @@ def super_group_modules(
             continue
         valid_members = []
         for member in members:
+            if member not in module_tree and member in owner_of:
+                member = owner_of[member]
+                if member in valid_members:
+                    continue
             if member not in module_tree:
                 logger.warning(
                     "Skipping unknown module '%s' in subsystem '%s'.",

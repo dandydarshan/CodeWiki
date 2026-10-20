@@ -22,7 +22,7 @@ from codewiki.cli.utils.progress import ProgressTracker
 # Import backend modules
 from codewiki.src.be.documentation_generator import DocumentationGenerator
 from codewiki.src.be.doc_layout import list_doc_files
-from codewiki.src.config import DEFAULT_LAYOUT
+from codewiki.src.config import DEFAULT_CONCURRENCY, DEFAULT_LAYOUT
 from codewiki.src.config import Config as BackendConfig
 from codewiki.src.config import set_cli_context
 
@@ -32,6 +32,25 @@ def _generated_files(working_dir: str) -> list[str]:
     pages = sorted(list_doc_files(working_dir).values())
     jsons = sorted(f for f in os.listdir(working_dir) if f.endswith(".json"))
     return pages + jsons
+
+
+def _module_file_count(module_info: dict) -> int:
+    """Distinct source files in a module and its sub-modules.
+
+    Component ids are ``<file path>::<name>``; a super-group keeps its
+    components in its children, so they are counted too.
+    """
+    files: set[str] = set()
+    stack = [module_info]
+    while stack:
+        info = stack.pop()
+        if not isinstance(info, dict):
+            continue
+        files.update(str(cid).split("::", 1)[0] for cid in info.get("components") or [])
+        children = info.get("children")
+        if isinstance(children, dict):
+            stack.extend(children.values())
+    return len(files)
 
 
 class CLIDocumentationGenerator:
@@ -70,6 +89,7 @@ class CLIDocumentationGenerator:
         self.commit_id = commit_id
         self.progress_tracker = ProgressTracker(total_stages=5, verbose=verbose)
         self.job = DocumentationJob()
+        self._usage_ledger = None
 
         # Setup job metadata
         self.job.repository_path = str(repo_path)
@@ -122,6 +142,16 @@ class CLIDocumentationGenerator:
 
             backend_logger.addHandler(console_handler)
 
+            # Keep the progress lines readable: without this, every claude /
+            # codex session prints its transcript (caw's default display) and
+            # FastMCP logs each MCP session at INFO, interleaved across the
+            # concurrent agents. CAW_LOG=short|full still opts back in.
+            logging.getLogger("mcp").setLevel(logging.WARNING)
+            if "CAW_LOG" not in os.environ:
+                from codewiki._vendor.caw import set_global_display
+
+                set_global_display(None)
+
         # Prevent propagation to root logger to avoid duplicate messages
         backend_logger.propagate = False
 
@@ -159,6 +189,7 @@ class CLIDocumentationGenerator:
                 max_depth=self.config.get("max_depth", 2),
                 request_limit=self.config.get("request_limit", 100),
                 agent_retries=self.config.get("agent_retries", 3),
+                concurrency=self.config.get("concurrency", DEFAULT_CONCURRENCY),
                 max_context_tokens=self.config.get("max_context_tokens", 0),
                 agent_instructions=self.config.get("agent_instructions"),
                 use_gitignore=self.config.get("use_gitignore", True),
@@ -172,6 +203,7 @@ class CLIDocumentationGenerator:
 
             # Run backend documentation generation
             asyncio.run(self._run_backend_generation(backend_config))
+            self._record_usage_statistics()
 
             # Stage 4: HTML Generation (optional)
             if self.generate_html:
@@ -202,6 +234,8 @@ class CLIDocumentationGenerator:
 
         # Create documentation generator
         doc_generator = DocumentationGenerator(backend_config, commit_id=self.commit_id)
+        doc_generator.progress_emit = self.progress_tracker.note
+        self._usage_ledger = doc_generator.usage_ledger
 
         # Incremental update (component-level): keep the previous graph before
         # the builder overwrites it, so the updater can diff old against new.
@@ -313,18 +347,21 @@ class CLIDocumentationGenerator:
                             "Clustering modules with LLM...",
                         )
                 cluster_model = backend_config.cluster_model or None
-                module_tree = cluster_modules(
-                    leaf_nodes,
-                    components,
-                    backend_config,
-                    completer=lambda p: doc_generator.backend.complete(p, model=cluster_model),
-                )
-                if module_tree:
-                    module_tree = super_group_modules(
-                        module_tree,
+                with doc_generator.usage_ledger.in_phase("clustering"):
+                    module_tree = cluster_modules(
+                        leaf_nodes,
+                        components,
                         backend_config,
                         completer=lambda p: doc_generator.backend.complete(p, model=cluster_model),
                     )
+                    if module_tree:
+                        module_tree = super_group_modules(
+                            module_tree,
+                            backend_config,
+                            completer=lambda p: doc_generator.backend.complete(
+                                p, model=cluster_model
+                            ),
+                        )
                 # Artifact nodes the clustering LLM dropped get a fixed module
                 # so build/CI/config coverage does not depend on the LLM.
                 if getattr(backend_config, "artifacts_enabled", True):
@@ -351,11 +388,7 @@ class CLIDocumentationGenerator:
                         f"Created {len(module_tree)} modules",
                     )
                 for mod_name in sorted(module_tree.keys()):
-                    file_count = (
-                        len(module_tree[mod_name])
-                        if isinstance(module_tree[mod_name], list)
-                        else "?"
-                    )
+                    file_count = _module_file_count(module_tree[mod_name])
                     self.progress_tracker.update_stage(
                         1.0, f"  Module: {mod_name} ({file_count} files)"
                     )
@@ -450,7 +483,8 @@ class CLIDocumentationGenerator:
         updater = IncrementalUpdater(
             backend_config, doc_generator.backend, doc_generator, update_opts
         )
-        record = await updater.run(prev_graph_path, components, leaf_nodes, revision)
+        with doc_generator.usage_ledger.in_phase("update"):
+            record = await updater.run(prev_graph_path, components, leaf_nodes, revision)
         self._last_update_record = record
         summary = record.summary()
         if self.verbose:
@@ -544,7 +578,9 @@ class CLIDocumentationGenerator:
         # Generate HTML with auto-loading of module_tree and metadata from docs_dir
         output_path = self.output_dir / "index.html"
         if self.verbose:
-            self.progress_tracker.update_stage(0.5, "Building search_index.json for Ctrl+K search...")
+            self.progress_tracker.update_stage(
+                0.5, "Building search_index.json for Ctrl+K search..."
+            )
         viewer_summary = html_generator.generate(
             output_path=output_path,
             title=repo_info["name"],
@@ -578,6 +614,29 @@ class CLIDocumentationGenerator:
             self.progress_tracker.update_stage(1.0, "Generated index.html")
 
         self.progress_tracker.complete_stage()
+
+    def _record_usage_statistics(self):
+        """Copy the run's token and cost totals from the usage ledger into the job."""
+        if self._usage_ledger is None:
+            return
+        summary = self._usage_ledger.summary()
+        totals = summary["totals"]
+        stats = self.job.statistics
+        stats.usage_totals = totals
+        stats.total_tokens_used = int(
+            sum(
+                totals.get(k, 0)
+                for k in (
+                    "input_tokens",
+                    "output_tokens",
+                    "cache_read_tokens",
+                    "cache_write_tokens",
+                )
+            )
+            or totals.get("total_tokens", 0)
+        )
+        stats.total_cost_usd = totals.get("cost_usd")
+        stats.unpriced_models = summary["unpriced_models"]
 
     def _finalize_job(self):
         """Finalize the job (metadata already created by backend)."""

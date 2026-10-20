@@ -6,8 +6,10 @@ import sys
 import click
 
 from codewiki import __version__
+from codewiki.cli.commands.ask import ask_command
 from codewiki.cli.commands.config import config_group
 from codewiki.cli.commands.generate import generate_command
+from codewiki.cli.commands.serve import serve_command
 from codewiki.cli.utils.branding import print_banner
 
 
@@ -20,7 +22,7 @@ def cli(ctx):
 
     AI agents write the documentation from your dependency graph. Supports
     Python, Java, JavaScript, TypeScript, C, C++, C#, Kotlin, PHP, Ruby,
-    Scala, and Rust.
+    Scala, Rust, and Dart.
     """
     # Ensure context object exists
     ctx.ensure_object(dict)
@@ -43,6 +45,8 @@ def version():
 # Register command groups
 cli.add_command(config_group)
 cli.add_command(generate_command, name="generate")
+cli.add_command(ask_command, name="ask")
+cli.add_command(serve_command, name="serve")
 
 
 @cli.command(name="mcp")

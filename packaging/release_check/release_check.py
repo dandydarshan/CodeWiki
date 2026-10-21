@@ -380,8 +380,8 @@ def main() -> int:
         if run.step(title, setup, cmd, cwd, step_env):
             continue
         if title.startswith("Install ") and title != "Install uv":
-            # uv is stricter than pip about wheel metadata; record the uv failure, but
-            # still run the rest of the check on a pip install.
+            # Record the uv failure (e.g. a corrupt uv cache entry; `uv cache clean <pkg>`
+            # fixes that), but still run the rest of the check on a pip install.
             run.total += 1
             if run.step(f"{title} (pip fallback)", setup, [vpy, "-m", "pip", "install", source]):
                 continue

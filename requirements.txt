@@ -71,7 +71,6 @@ matplotlib-inline==0.1.7
 mcp==1.16.0
 mdurl==0.1.2
 mermaid-parser-py==0.0.2
-mermaid-py==0.8.0
 mistralai==1.9.10
 multidict==6.6.3
 nest-asyncio==1.6.0

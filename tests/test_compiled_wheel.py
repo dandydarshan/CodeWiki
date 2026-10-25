@@ -243,12 +243,11 @@ def test_module_agent_end_to_end_with_scripted_model(tmp_path, monkeypatch):
 # Runs in a subprocess: the failure this guards against is a segfault.
 _CAW_MERMAID_SCRIPT = r"""
 import asyncio
-import os
+import shutil
 import sys
 import tempfile
 import threading
 
-os.environ["MERMAID_VALIDATE"] = "0"  # no mermaid.ink fallback: PythonMonkey or nothing
 import codewiki.src.be.utils as u
 
 
@@ -287,8 +286,11 @@ def run():
         assert "errors found" in bad, bad
     else:
         # Off the main thread PythonMonkey would crash Python at exit; it must
-        # not be loaded at all (validation falls back to mermaid-py).
+        # not be loaded at all (validation falls back to system Node.js).
         assert "pythonmonkey" not in sys.modules, "PythonMonkey loaded off the main thread"
+        if shutil.which("node"):
+            assert "syntax correct" in good, good
+            assert "errors found" in bad, bad
 
 
 errors = []

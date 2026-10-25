@@ -160,6 +160,12 @@ def extract_mermaid_blocks(content: str) -> List[Tuple[int, str]]:
 _PYTHONMONKEY_BROKEN = False
 _NODE_TIMEOUT_SECONDS = 15.0
 
+# Disabled: remote fallback through mermaid-py, which sends diagram content to
+# https://mermaid.ink (or MERMAID_INK_SERVER). Kept commented out so it can be
+# brought back: uncomment this, _parse_via_mermaid_py, the block at the end of
+# validate_single_diagram's fallbacks, and mermaid-py in pyproject/requirements.
+# _MERMAID_PY_BROKEN = os.environ.get("MERMAID_VALIDATE", "0").strip() != "1"
+
 # Validation never touches the network: PythonMonkey, then Node, then skip.
 _pm_unavailable_warned = False
 _skip_warned = False
@@ -322,6 +328,22 @@ def _parse_via_node(diagram_content: str) -> str | None:
     return result.stderr.strip() or "Mermaid parse failed (no message from Node.js)"
 
 
+# def _parse_via_mermaid_py(diagram_content: str) -> str:
+#     """Validate via mermaid-py. Returns parse-error text, or "" if valid.
+#
+#     mermaid-py raises MermaidError on parse failure and returns an SVG body
+#     on success — we must drive the result off the exception, not the body
+#     text, otherwise a successful SVG gets reported as a parse error.
+#     """
+#     import mermaid as md
+#
+#     try:
+#         md.Mermaid(diagram_content)
+#         return ""
+#     except Exception as e:
+#         return str(e)
+
+
 def _run_in_daemon_thread(fn, *args) -> "asyncio.Future":
     """Run fn in a daemon thread and return an awaitable for its result.
 
@@ -373,6 +395,20 @@ async def validate_single_diagram(diagram_content: str, diagram_num: int, line_s
         except asyncio.TimeoutError:
             core_error = None
             _warn_validation_skipped_once("Node.js validator timed out.")
+    # Disabled remote fallback (see _MERMAID_PY_BROKEN above); needs
+    # `global _MERMAID_PY_BROKEN` at the top of this function.
+    # if core_error is None and not _MERMAID_PY_BROKEN:
+    #     try:
+    #         core_error = await asyncio.wait_for(
+    #             _run_in_daemon_thread(_parse_via_mermaid_py, diagram_content),
+    #             timeout=_NODE_TIMEOUT_SECONDS,
+    #         )
+    #     except asyncio.TimeoutError:
+    #         # Latch so later diagrams don't each block 15s on the same service.
+    #         _MERMAID_PY_BROKEN = True
+    #         core_error = None
+    #     except Exception as e:
+    #         return f"  Diagram {diagram_num}: Exception during validation - {str(e)}"
     # Validation unavailable is not a syntax error: a non-empty return here would
     # make callers report valid diagrams as broken and send agents into fix loops.
     if not core_error:

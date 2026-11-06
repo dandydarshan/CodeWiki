@@ -306,7 +306,6 @@ def test_saved_graph_holds_no_absolute_paths(tmp_path):
 
 def test_codewikis_own_output_is_not_analysed_as_repo_code(tmp_path):
     """A second run used to add the copied helper script (~17 functions) to the user's code."""
-    import shutil
 
     from codewiki.src.be.dependency_analyzer import DependencyGraphBuilder
     from codewiki.src.config import MODULE_TREE_OWNERSHIP_VALIDATOR, Config
@@ -330,16 +329,10 @@ def test_codewikis_own_output_is_not_analysed_as_repo_code(tmp_path):
     (repo / "pkg").mkdir(parents=True)
     (repo / "pkg" / "a.py").write_text("def f():\n    return 1\n")
     (repo / "docs" / "temp").mkdir(parents=True)
-    script = os.path.join(
-        os.path.dirname(__file__),
-        "..",
-        "codewiki",
-        "templates",
-        "docs",
-        MODULE_TREE_OWNERSHIP_VALIDATOR,
-    )
-    shutil.copy(script, repo / "docs" / MODULE_TREE_OWNERSHIP_VALIDATOR)  # as `generate` does
-    shutil.copy(script, repo / "pkg" / MODULE_TREE_OWNERSHIP_VALIDATOR)  # a real source copy
+    # A stand-in with the helper's name: the tests may run from a copy outside the repo.
+    script = "def check_tree(tree):\n    return tree\n\n\ndef main():\n    return check_tree({})\n"
+    (repo / "docs" / MODULE_TREE_OWNERSHIP_VALIDATOR).write_text(script)  # as `generate` copies it
+    (repo / "pkg" / MODULE_TREE_OWNERSHIP_VALIDATOR).write_text(script)  # a real source copy
     (repo / "docs" / "temp" / "cache.py").write_text("def cached():\n    return 1\n")
     (repo / "docs" / "conf.py").write_text("def setup(app):\n    return app\n")  # the user's own
 

@@ -256,3 +256,52 @@ def test_clipped_diagram_labels_are_rendered_again(page):
     page.wait_for_selector("#content .mermaid svg")
     assert page.evaluate(RERENDER, False) == [1, False]  # fits first time: no extra render
     assert page.evaluate(RERENDER, True) == [2, False]  # clipped: rendered again, now fits
+
+
+ESCAPES = [
+    ("A -->|contains <cpm-sdk-app-root>| B", "A -->|contains #lt;cpm-sdk-app-root#gt;| B"),
+    ('A["List<String> items"]', 'A["List#lt;String#gt; items"]'),
+    ("A[Map<String, List<Integer>> cache]", "A[Map#lt;String, List#lt;Integer#gt;#gt; cache]"),
+    ('A["one<br/>two<br>three <b>bold</b>"]', 'A["one<br/>two<br>three <b>bold</b>"]'),
+    ("A --> B\nB <--> C\nC -.-> D\nD ==> E", "A --> B\nB <--> C\nC -.-> D\nD ==> E"),
+    (
+        "class Shape{\n  <<interface>>\n}\nShape <|-- Circle",
+        "class Shape{\n  <<interface>>\n}\nShape <|-- Circle",
+    ),
+    ("Alice->>Bob: hi", "Alice->>Bob: hi"),
+]
+
+
+def test_mermaid_tag_like_text_is_escaped_not_dropped(page):
+    page.wait_for_selector("#content .mermaid svg")
+    for src, expected in ESCAPES:
+        assert page.evaluate("escapeMermaidTags", src) == expected
+
+
+RENDERED = """async (src) => {
+    const box = document.createElement('div');
+    box.className = 'mermaid';
+    box.textContent = src;
+    document.getElementById('content').appendChild(box);
+    await renderMermaidDiagrams(document.getElementById('content'));
+    const text = box.querySelector('.mermaid-error') ? 'ERROR' : box.querySelector('svg').textContent;
+    box.remove();
+    return text;
+}"""
+
+
+def test_angle_brackets_survive_into_the_diagram(page):
+    page.wait_for_selector("#content .mermaid svg")
+    text = page.evaluate(
+        RENDERED,
+        "flowchart TD\n A -->|contains <app-root>| B[Map<String, List<Integer>>]\n"
+        ' B --> C["one<br/>two"]',
+    )
+    assert "contains <app-root>" in text
+    assert "Map<String, List<Integer>>" in text
+    assert "onetwo" in text  # <br/> stayed a line break, not literal text
+
+    stereo = page.evaluate(
+        RENDERED, "classDiagram\n class Shape{\n  <<interface>>\n }\n Shape <|-- Circle"
+    )
+    assert "interface" in stereo and "<interface>" not in stereo

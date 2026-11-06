@@ -45,7 +45,8 @@ bring the affected documentation pages up to date with the smallest correct edit
 4. Use `read_code_components` to read the fresh code of any component id when the diff alone is
    not enough. Use `str_replace_editor` with `working_dir="docs"` and `command="view"` to read a
    page before editing it.
-5. Mermaid diagrams must stay valid. Links between pages are relative to the linking page,
+5. Mermaid diagrams must stay valid; write `<` and `>` in their labels as `#lt;` and `#gt;`
+   (raw angle brackets are read as HTML and removed). Links between pages are relative to the linking page,
    using the page paths shown in the WRITE SET and the MODULE TREE: `[text](page.md)`,
    `[text](../page.md)`, `[text](sub/page.md)`.
 </RULES>

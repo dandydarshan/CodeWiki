@@ -358,3 +358,35 @@ def test_chat_only_uses_the_server_for_its_own_repo(page):
         if len(args) == 3:
             args[2] = page.evaluate("location.origin")  # opened from that server itself
         assert page.evaluate(OURS, args) is expected, args
+
+
+def test_chat_says_when_the_browser_blocks_localhost(site, browser):
+    """On GitHub Pages, Chrome asks before the site may reach this machine. Denied, every probe
+    fails as if `codewiki serve` were down, so say what is actually wrong."""
+    # Make the test site a "public" origin, as GitHub Pages is, so Local Network Access applies.
+    args = [
+        f"--ip-address-space-overrides={site[len('http://') :]}=public",
+        f"--unsafely-treat-insecure-origin-as-secure={site}",
+    ]
+    try:
+        public = browser.browser_type.launch(args=args)
+    except Exception:  # noqa: BLE001 — no bundled browser: use the system one, as `browser` does
+        exe = shutil.which("chromium") or shutil.which("chromium-browser")
+        public = browser.browser_type.launch(executable_path=exe, args=args)
+    try:
+        for allowed, expected in (
+            (False, "Your browser is blocking"),
+            (True, "Chat needs CodeWiki running"),
+        ):
+            ctx = public.new_context()
+            if allowed:
+                ctx.grant_permissions(["local-network-access"], origin=site)
+            pg = ctx.new_page()
+            pg.goto(site + "/")
+            pg.wait_for_selector(".nav-item")
+            pg.click("#chat-trigger")
+            pg.wait_for_selector(".chat-offline")
+            assert expected in pg.inner_text(".chat-offline"), allowed
+            ctx.close()
+    finally:
+        public.close()

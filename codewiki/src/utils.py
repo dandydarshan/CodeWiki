@@ -18,12 +18,17 @@ class FileManager:
         os.makedirs(path, exist_ok=True)
 
     @staticmethod
-    def save_json(data: Any, filepath: str) -> None:
+    def save_json(data: Any, filepath: str, indent: int = 4) -> None:
         """Save data as JSON to file (atomically, so readers never see half a file)."""
         tmp_path = f"{filepath}.{os.getpid()}.{threading.get_ident()}.tmp"
-        with open(tmp_path, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=4, ensure_ascii=False)
-        os.replace(tmp_path, filepath)
+        try:
+            with open(tmp_path, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=indent, ensure_ascii=False)
+            os.replace(tmp_path, filepath)
+        except BaseException:
+            if os.path.exists(tmp_path):
+                os.remove(tmp_path)
+            raise
 
     @staticmethod
     def load_json(filepath: str) -> Optional[Dict[str, Any]]:

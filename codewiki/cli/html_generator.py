@@ -11,7 +11,7 @@ from typing import Optional, Dict, Any
 from codewiki.cli.utils.errors import FileSystemError
 from codewiki.cli.utils.fs import safe_write, safe_read
 from codewiki.src.be.search_index import build_search_index
-from codewiki.src.config import DEFAULT_QA_PORT, SEARCH_INDEX_FILENAME
+from codewiki.src.config import DEFAULT_QA_PORT, QA_PORT_COUNT, SEARCH_INDEX_FILENAME
 from codewiki.src.language import language_tag
 
 logger = logging.getLogger(__name__)
@@ -214,7 +214,14 @@ class HTMLGenerator:
         config = {
             "repository_url": repository_url,
             "commit_id": commit_id,
-            "chat": {"endpoints": [f"http://127.0.0.1:{DEFAULT_QA_PORT}"]},
+            # Every port `codewiki serve` may pick; the site uses the one serving this repo.
+            "chat": {
+                "endpoints": [
+                    f"http://127.0.0.1:{p}"
+                    for p in range(DEFAULT_QA_PORT, DEFAULT_QA_PORT + QA_PORT_COUNT)
+                ],
+                "repo": title,
+            },
             **config,
         }
 

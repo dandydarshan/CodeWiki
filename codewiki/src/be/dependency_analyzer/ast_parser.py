@@ -1,10 +1,10 @@
-import json
 import logging
 import os
 from typing import TYPE_CHECKING
 
 from codewiki.src.be.dependency_analyzer.analysis.analysis_service import AnalysisService
 from codewiki.src.be.dependency_analyzer.models.core import Node
+from codewiki.src.utils import file_manager
 
 if TYPE_CHECKING:  # pragma: no cover
     from codewiki.src.be.dependency_analyzer.analyzers.artifact import ArtifactOptions
@@ -210,8 +210,8 @@ class DependencyParser:
         if dir_name:
             os.makedirs(dir_name, exist_ok=True)
 
-        with open(output_path, "w", encoding="utf-8") as f:
-            json.dump(result, f, indent=2, ensure_ascii=False)
+        # Atomic: several processes (two IDEs' MCP servers, serve, generate) may share this file.
+        file_manager.save_json(result, output_path, indent=2)
 
         logger.debug(f"Saved {len(self.components)} components to {output_path}")
         return result

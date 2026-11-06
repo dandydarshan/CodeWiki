@@ -16,6 +16,7 @@ import asyncio
 import json
 import logging
 import os
+import socket
 import threading
 from collections.abc import Iterable
 from urllib.parse import urlparse
@@ -58,21 +59,44 @@ def origin_of(url: str | None) -> str | None:
     return f"{parsed.scheme}://{parsed.netloc}".lower()
 
 
-def default_origins(host: str, port: int, docs_dir: str) -> set[str]:
-    origins = {f"http://127.0.0.1:{port}", f"http://localhost:{port}", f"http://{host}:{port}"}
+def repository_info(docs_dir: str) -> dict:
+    """The repo's name, GitHub URL and Pages URL, as the docs site's index.html records them."""
     try:
         from pathlib import Path
 
         from codewiki.cli.html_generator import HTMLGenerator
 
         index = get_index(docs_dir)
-        info = HTMLGenerator().detect_repository_info(Path(index.repo_path or docs_dir))
-        pages = origin_of(info.get("github_pages_url"))
-        if pages:
-            origins.add(pages)
-    except Exception as e:  # noqa: BLE001 — the Pages origin is a convenience
-        logger.debug("No GitHub Pages origin detected: %s", e)
+        return HTMLGenerator().detect_repository_info(Path(index.repo_path or docs_dir))
+    except Exception as e:  # noqa: BLE001 — the repo info is a convenience
+        logger.debug("No repository info detected: %s", e)
+        return {}
+
+
+def default_origins(host: str, port: int, docs_dir: str) -> set[str]:
+    origins = {f"http://127.0.0.1:{port}", f"http://localhost:{port}", f"http://{host}:{port}"}
+    pages = origin_of(repository_info(docs_dir).get("github_pages_url"))
+    if pages:
+        origins.add(pages)
     return {o.lower() for o in origins}
+
+
+def find_free_port(host: str, start: int, count: int) -> int | None:
+    """First port in ``start .. start+count-1`` that ``host`` can listen on, else None."""
+    family = socket.AF_INET6 if ":" in host else socket.AF_INET
+    for port in range(start, start + count):
+        with socket.socket(family, socket.SOCK_STREAM) as s:
+            # Bind as uvicorn does: on POSIX, SO_REUSEADDR still fails while something listens,
+            # but not on a port a just-stopped server left in TIME_WAIT. (On Windows it would
+            # let us share a listening port, so leave it off there.)
+            if os.name != "nt":
+                s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            try:
+                s.bind((host, port))
+            except OSError:
+                continue
+            return port
+    return None
 
 
 def create_app(
@@ -119,6 +143,10 @@ def create_app(
             response.headers[key] = value
         return response
 
+    # Several repos can be served at once and every GitHub Pages site of one user shares an
+    # origin, so the docs site matches its own server by repository_url (or name).
+    repository_url = repository_info(docs_dir).get("url")
+
     @app.get("/api/health")
     def health():
         index = get_index(docs_dir)
@@ -127,6 +155,7 @@ def create_app(
             "ok": True,
             "version": __version__,
             "repo": os.path.basename(index.repo_path or docs_dir),
+            "repository_url": repository_url,
             "freshness": {
                 "summary": f.summary(),
                 "docs_commit": f.docs_commit,

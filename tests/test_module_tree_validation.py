@@ -253,3 +253,22 @@ def test_missing_session_errors(tmp_path):
         )
     )
     assert "error" in result
+
+
+def test_mcp_workspace_keeps_itself_out_of_git(tmp_path):
+    SessionWorkspace(tmp_path, "s1")
+    # Left in the user's repo if the IDE is killed mid-session; must never show up to commit.
+    assert (tmp_path / ".codewiki" / ".gitignore").read_text().splitlines()[-1] == "*"
+
+
+def test_mcp_server_exit_removes_its_workspaces(tmp_path):
+    from codewiki.mcp.session import SessionStore
+
+    store = SessionStore()
+    for i in range(2):
+        store.create(
+            str(tmp_path), str(tmp_path / "docs"), {}, [], SessionWorkspace(tmp_path, f"s{i}")
+        )
+    store.close_all()  # what the server does when the IDE disconnects
+    sessions = tmp_path / ".codewiki" / "sessions"
+    assert not sessions.exists() or not any(sessions.iterdir())

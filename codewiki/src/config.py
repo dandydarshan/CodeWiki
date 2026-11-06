@@ -17,8 +17,10 @@ FIRST_MODULE_TREE_FILENAME = "first_module_tree.json"
 MODULE_TREE_FILENAME = "module_tree.json"
 OVERVIEW_FILENAME = "overview.md"
 SEARCH_INDEX_FILENAME = "search_index.json"
-# `codewiki serve` listens here; the docs site looks for it here to enable chat
+# `codewiki serve` listens on the first free port of DEFAULT_QA_PORT..+QA_PORT_COUNT-1 (one per
+# repo served at once); the docs site looks for its own repo's server on those ports.
 DEFAULT_QA_PORT = 8765
+QA_PORT_COUNT = 10
 # Docs layout: "hierarchical" mirrors the module tree in nested folders
 # (``auth.md`` + ``auth/login.md``); "flat" keeps every page in the docs root
 # (for small models that keep getting relative links wrong).

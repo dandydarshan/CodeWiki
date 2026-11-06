@@ -14,6 +14,7 @@ import os
 import shutil
 
 from codewiki.src.be.dependency_analyzer.models.core import Node
+from codewiki.src.utils import file_manager
 
 logger = logging.getLogger(__name__)
 
@@ -92,6 +93,65 @@ def prune_superseded_graphs(dependency_graph_dir: str, keep: str) -> list[str]:
     return removed
 
 
+def rebuild_graph_at_commit(config, commit: str) -> str | None:
+    """Rebuild the dependency graph of ``commit`` as the previous graph; return its path or None.
+
+    For when the saved graph is missing: ``docs/temp/`` is git-ignored, so a fresh clone (a
+    teammate, CI) has none. Parsing needs no LLM, and without it ``--update`` falls back to a
+    full rebuild. Uses a temporary git worktree, so the user's checkout is never touched.
+    """
+    import dataclasses
+    import subprocess
+    import tempfile
+
+    from codewiki.src.be.dependency_analyzer import DependencyGraphBuilder
+
+    repo = config.repo_path
+    with tempfile.TemporaryDirectory(prefix="codewiki-prev-") as tmp:
+        # Same folder name as the repo, so the graph's file name and ids come out the same.
+        tree = os.path.join(tmp, os.path.basename(os.path.normpath(repo)))
+        try:
+            subprocess.run(
+                ["git", "-C", repo, "worktree", "add", "--detach", "--quiet", tree, commit],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+        except (OSError, subprocess.CalledProcessError) as e:
+            detail = getattr(e, "stderr", "") or e
+            logger.warning(
+                "Cannot check out docs commit %s to rebuild the previous dependency graph (%s); "
+                "in a shallow CI clone, fetch more history",
+                commit[:12],
+                str(detail).strip(),
+            )
+            return None
+        try:
+            # Everything the builder writes stays in tmp, not in the real docs/temp.
+            built = dataclasses.replace(
+                config,
+                repo_path=tree,
+                output_dir=os.path.join(tmp, "out"),
+                dependency_graph_dir=os.path.join(tmp, "out", "graphs"),
+            )
+            logger.info("Rebuilding the dependency graph of docs commit %s…", commit[:12])
+            DependencyGraphBuilder(built).build_dependency_graph()
+            src = find_any_graph_file(built.dependency_graph_dir)
+            if src is None:
+                return None
+            os.makedirs(config.dependency_graph_dir, exist_ok=True)
+            dst = prev_graph_path(config.dependency_graph_dir, repo)
+            shutil.copyfile(src, dst)
+            return dst
+        except Exception as e:  # noqa: BLE001 — fall back to a full build, as before
+            logger.warning("Could not rebuild the previous dependency graph: %s", e)
+            return None
+        finally:
+            subprocess.run(
+                ["git", "-C", repo, "worktree", "remove", "--force", tree], capture_output=True
+            )
+
+
 def snapshot_old_graph(dependency_graph_dir: str, repo_path: str) -> str | None:
     """Copy the previous build's graph to ``*.prev.json``; return that path or None."""
     src = graph_file_path(dependency_graph_dir, repo_path)
@@ -130,5 +190,4 @@ def save_graph(graph: dict[str, Node], path: str) -> None:
             d["depends_on"] = sorted(d["depends_on"])
         result[cid] = d
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(result, f, indent=2, ensure_ascii=False)
+    file_manager.save_json(result, path, indent=2)  # atomic: other processes may be reading

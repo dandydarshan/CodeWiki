@@ -60,6 +60,10 @@ class SessionWorkspace:
     def __init__(self, repo_path: Path, session_id: str) -> None:
         self.root = repo_path / _WORKSPACE_REL / session_id
         self.root.mkdir(parents=True, exist_ok=True)
+        # Scratch space in the user's repo; left behind if the IDE is killed, so keep it out of git.
+        ignore = repo_path / _WORKSPACE_REL.parts[0] / ".gitignore"
+        if not ignore.exists():
+            ignore.write_text("# CodeWiki MCP scratch space. Do not commit.\n*\n", encoding="utf-8")
         (self.root / "sources").mkdir(exist_ok=True)
         logger.debug("Workspace created at %s", self.root)
 

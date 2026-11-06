@@ -24,6 +24,23 @@ of them.
 | `temp/artifact_index.json` | The artifact index |
 | `metadata.json` | Build info, including the commit id |
 
+## What to commit
+
+Commit all of `docs/`, including `temp/dependency_graphs/`. The graph is what
+lets `--update` reuse the docs anywhere: on a feature branch cut from `main`,
+on another user's machine, after a squash merge, and in a shallow CI clone.
+Without it the updater has to rebuild the graph from the commit in
+`metadata.json`, which needs that commit in the clone (`fetch-depth: 0` in CI;
+gone after a squash merge), or else falls back to a full build.
+
+Git stores the graph compactly: a 5 MB graph added 0.6 MB to the repository
+history, and each later update about 1 KB. CodeWiki writes `docs/temp/.gitattributes`
+so the graph shows no diffs, collapses in GitHub pull requests, and is never
+text-merged, and `docs/temp/.gitignore` so scratch files (`*.prev.json`) stay
+out. If two branches both updated the docs, the merge conflicts in `docs/`:
+keep one side (`git checkout --ours docs/`), commit, then run
+`codewiki generate --update` on the result.
+
 ## What `--update` does
 
 The unit of change is the **component** (a class, a function, a build
@@ -68,6 +85,12 @@ Two ratios are checked before any agent runs:
 Above either threshold the updater runs a full build and writes
 `full_fallback` with both ratios into the record. A saved graph that cannot
 be loaded also leads to a full build, recorded as a detector failure.
+
+Before a full build the old docs are cleared. If `docs/` is committed and
+unmodified, git already holds them: restore with
+`git restore --source=HEAD docs/`. Otherwise they move to
+`docs.prev-<commit>/` next to `docs/`. That folder is git-ignored, only the
+latest one is kept, and you can delete it once the new docs look right.
 
 ## Comparing against a specific commit
 

@@ -33,6 +33,7 @@ Generate documentation following this structure:
 
 3. **Visual Documentation**:
    - Mermaid diagrams for architecture, dependencies, and data flow
+   - In diagrams, write `<` and `>` in Mermaid labels as `#lt;` and `#gt;` (e.g. `List#lt;String#gt;`): raw angle brackets are read as HTML and removed. `<br/>` is the only tag to use
    - Component interaction diagrams
    - Process flow diagrams where relevant
 </DOCUMENTATION_STRUCTURE>
@@ -68,7 +69,7 @@ Create a comprehensive documentation that helps developers and maintainers under
 <DOCUMENTATION_REQUIREMENTS>
 Generate documentation following the following requirements:
 1. Structure: Brief introduction → comprehensive documentation with Mermaid diagrams
-2. Diagrams: Include architecture, dependencies, data flow, component interaction, and process flows as relevant
+2. Diagrams: Include architecture, dependencies, data flow, component interaction, and process flows as relevant; write `<` and `>` in Mermaid labels as `#lt;` and `#gt;` (e.g. `List#lt;String#gt;`): raw angle brackets are read as HTML and removed. `<br/>` is the only tag to use
 3. References: Link to other module documentation instead of duplicating information
 </DOCUMENTATION_REQUIREMENTS>
 
@@ -103,7 +104,7 @@ You are an AI documentation assistant. Your task is to generate a brief overview
 
 The overview should be a brief documentation of the repository, including:
 - The purpose of the repository
-- The end-to-end architecture of the repository visualized by mermaid diagrams
+- The end-to-end architecture of the repository visualized by mermaid diagrams (write `<` and `>` in Mermaid labels as `#lt;` and `#gt;` (e.g. `List#lt;String#gt;`): raw angle brackets are read as HTML and removed. `<br/>` is the only tag to use)
 - The references to the core modules documentation
 
 Provide `{repo_name}` repo structure:
@@ -124,7 +125,7 @@ You are an AI documentation assistant. Your task is to generate a brief overview
 
 The overview should be a brief documentation of the module, including:
 - The purpose of the module
-- The architecture of the module visualized by mermaid diagrams
+- The architecture of the module visualized by mermaid diagrams (write `<` and `>` in Mermaid labels as `#lt;` and `#gt;` (e.g. `List#lt;String#gt;`): raw angle brackets are read as HTML and removed. `<br/>` is the only tag to use)
 - The references to the core components documentation
 
 Provide repo structure of the `{module_name}` module (marked with `is_target_for_overview_generation`):

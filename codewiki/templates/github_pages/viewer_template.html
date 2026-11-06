@@ -2988,18 +2988,12 @@
             // Convert markdown to HTML using marked
             let html = sanitizeHtml(marked.parse(markdown));
 
-            // Process mermaid code blocks
+            // Process mermaid code blocks. Keep the code HTML-escaped: the browser decodes it
+            // back to text, so the element's textContent is the exact diagram source. Decoding
+            // it here put `<…>` in the page as real, unsanitized HTML (tags lost, scripts run).
             html = html.replace(
                 /<pre><code class="language-mermaid">([\s\S]*?)<\/code><\/pre>/g,
-                (match, code) => {
-                    const decodedCode = code
-                        .replace(/&lt;/g, '<')
-                        .replace(/&gt;/g, '>')
-                        .replace(/&amp;/g, '&')
-                        .replace(/&quot;/g, '"')
-                        .replace(/&#39;/g, "'");
-                    return '<div class="mermaid">' + decodedCode + '</div>';
-                }
+                (match, code) => '<div class="mermaid">' + code + '</div>'
             );
 
             return html;
@@ -3059,6 +3053,22 @@
             });
         }
 
+        // Mermaid treats `<word…>` in labels as HTML and drops it, so `List<String>` showed as
+        // `List` and `<app-root>` vanished. Escape such text to Mermaid's #lt;/#gt;, keeping real
+        // formatting tags and Mermaid syntax (arrows like --> or <|--, <<interface>> stereotypes).
+        const MERMAID_FORMAT_TAG = /^\/?(br|b|i|u|s|em|strong|sub|sup)\s*\/?$/i;
+
+        function escapeMermaidTags(src) {
+            // Repeat so nested generics (Map<K, List<V>>) unwrap from the inside out.
+            for (let prev = null; prev !== src;) {
+                prev = src;
+                src = src.replace(/(?<!<)<(\/?[A-Za-z][^<>\n]*)>/g, function(tag, inner) {
+                    return MERMAID_FORMAT_TAG.test(inner) ? tag : '#lt;' + inner + '#gt;';
+                });
+            }
+            return src;
+        }
+
         async function renderMermaidDiagrams(root) {
             const mermaidElements = (root || document.getElementById('content')).querySelectorAll('.mermaid');
             // Label boxes are sized from text measured now, so let fonts finish loading first.
@@ -3068,7 +3078,7 @@
                 const element = mermaidElements[i];
                 // Keep the source around so diagrams can re-render on theme change
                 if (!element.dataset.src) {
-                    element.dataset.src = element.textContent;
+                    element.dataset.src = escapeMermaidTags(element.textContent);
                 }
 
                 try {

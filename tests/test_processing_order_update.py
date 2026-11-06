@@ -78,6 +78,9 @@ class FakeBackend:
         Path(working_dir, f"{module_name}.md").write_text(f"# {module_name}\n")
         return module_tree
 
+    async def run_overview_agent(self, prompt, *, system_prompt=None, **_):
+        return self.complete(prompt, system_prompt=system_prompt)
+
     def complete(self, prompt, model=None, system_prompt=None):
         self.complete_calls += 1
         return "<OVERVIEW>overview</OVERVIEW>"

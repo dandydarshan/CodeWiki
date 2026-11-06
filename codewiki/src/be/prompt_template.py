@@ -775,3 +775,16 @@ def format_overview_system_prompt(custom_instructions: str | None = None) -> str
         "Follow these instructions when writing the overview; they take precedence over "
         "conflicting defaults in the request (language, audience, structure, style)."
     )
+
+
+_OVERVIEW_PYDANTIC_TOOL_GUIDANCE = (
+    "Use the read_module_documentation tool to load every non-null docs_path listed "
+    "in REPO_STRUCTURE before writing the overview."
+)
+
+
+def append_pydantic_overview_tool_guidance(base: str | None) -> str:
+    """Custom-instructions system text plus pydantic-ai overview tool guidance."""
+    if base:
+        return f"{base}\n\n{_OVERVIEW_PYDANTIC_TOOL_GUIDANCE}"
+    return _OVERVIEW_PYDANTIC_TOOL_GUIDANCE

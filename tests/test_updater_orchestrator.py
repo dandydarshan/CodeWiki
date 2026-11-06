@@ -32,6 +32,9 @@ class FakeBackend:
         self.routing_prompts = []
         self.last_usage = None
 
+    async def run_overview_agent(self, prompt, *, system_prompt=None, **_):
+        return self.complete(prompt, system_prompt=system_prompt)
+
     def complete(self, prompt, *, model=None, system_prompt=None):
         self.complete_calls.append(prompt[:80])
         self.last_usage = {"prompt_tokens": 10, "completion_tokens": 5}

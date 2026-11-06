@@ -158,3 +158,101 @@ def test_diagram_viewer_pans_smoothly(page):
     page.keyboard.press("Escape")
     page.wait_for_timeout(200)
     assert page.locator(".mermaid-lightbox.open").count() == 0
+
+
+def _open_chat(page):
+    page.click("#chat-trigger")
+    page.wait_for_selector(".chat-panel.open")
+    page.wait_for_timeout(300)  # slide-in transition
+
+
+PANEL_WIDTH = "() => document.getElementById('chat-panel').getBoundingClientRect().width"
+
+
+def test_chat_drawer_resizes_and_remembers_its_width(page):
+    _open_chat(page)
+    assert page.evaluate(PANEL_WIDTH) == 440
+    messages_before = page.evaluate("document.getElementById('chat-messages').clientWidth")
+
+    handle = page.locator("#chat-resize").bounding_box()
+    x, y = handle["x"] + handle["width"] / 2, handle["y"] + handle["height"] / 2
+    page.mouse.move(x, y)
+    page.mouse.down()
+    page.mouse.move(x - 260, y, steps=10)
+    page.mouse.up()
+    width = page.evaluate(PANEL_WIDTH)
+    assert abs(width - (1280 - (x - 260))) <= 1, width
+    # The content follows the drawer: no fixed widths inside it.
+    assert page.evaluate("document.getElementById('chat-messages').clientWidth") > (
+        messages_before + 250
+    )
+
+    page.reload()
+    page.wait_for_selector(".nav-item")
+    _open_chat(page)
+    assert abs(page.evaluate(PANEL_WIDTH) - width) <= 1  # remembered
+
+    page.focus("#chat-resize")
+    page.keyboard.press("ArrowRight")
+    assert abs(page.evaluate(PANEL_WIDTH) - (width - 20)) <= 1
+
+    # Clamped to [320 px, 90% of the window].
+    for target, expected in ((5, 1152), (1275, 320)):
+        handle = page.locator("#chat-resize").bounding_box()
+        x = handle["x"] + handle["width"] / 2
+        page.mouse.move(x, y)
+        page.mouse.down()
+        page.mouse.move(target, y, steps=5)
+        page.mouse.up()
+        assert page.evaluate(PANEL_WIDTH) == expected
+
+    page.dblclick("#chat-resize")
+    assert page.evaluate(PANEL_WIDTH) == 440  # reset
+
+
+def test_ask_button_keeps_its_height_when_the_input_grows(page):
+    _open_chat(page)
+    page.evaluate("document.getElementById('chat-input').style.height = '140px'")
+    send = page.locator("#chat-send").bounding_box()
+    box = page.locator("#chat-input").bounding_box()
+    assert box["height"] == 140
+    assert send["height"] == 40
+    assert abs((send["y"] + send["height"]) - (box["y"] + box["height"])) <= 1  # bottom-aligned
+
+
+# Re-render the page's diagram, optionally narrowing one label box in the first render
+# (what Chrome on Windows produced when it measured before Mermaid's font was ready).
+RERENDER = """async (clipFirst) => {
+    let calls = 0;
+    const real = mermaid.render.bind(mermaid);
+    mermaid.render = async (id, src) => {
+        const out = await real(id, src);
+        if (++calls === 1 && clipFirst) {
+            out.svg = out.svg.replace(/(<foreignObject height="[\\d.]+" width=")[1-9][\\d.]*/, '$15');
+        }
+        return out;
+    };
+    try {
+        const el = document.querySelector('#content .mermaid');
+        el.innerHTML = '';
+        await renderMermaidDiagrams();
+        return [calls, mermaidLabelsClipped(el)];
+    } finally {
+        mermaid.render = real;
+    }
+}"""
+
+
+def test_diagram_labels_use_the_page_font(page):
+    page.wait_for_selector("#content .mermaid svg")
+    fonts = page.evaluate(
+        "[getComputedStyle(document.querySelector('#content .mermaid .nodeLabel')).fontFamily,"
+        " getComputedStyle(document.body).fontFamily]"
+    )
+    assert fonts[0] == fonts[1]
+
+
+def test_clipped_diagram_labels_are_rendered_again(page):
+    page.wait_for_selector("#content .mermaid svg")
+    assert page.evaluate(RERENDER, False) == [1, False]  # fits first time: no extra render
+    assert page.evaluate(RERENDER, True) == [2, False]  # clipped: rendered again, now fits

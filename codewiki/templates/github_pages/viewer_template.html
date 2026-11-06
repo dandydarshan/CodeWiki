@@ -1278,7 +1278,8 @@
             right: 0;
             bottom: 0;
             z-index: 600;
-            width: min(440px, 100vw);
+            /* --chat-width is set by dragging .chat-resize (see setupChatResize). */
+            width: min(var(--chat-width, 440px), 100vw);
             display: flex;
             flex-direction: column;
             background: var(--panel-bg);
@@ -1294,6 +1295,43 @@
             transform: none;
             visibility: visible;
             transition: transform 0.2s ease;
+        }
+
+        .chat-panel.resizing {
+            transition: none;
+            user-select: none;
+        }
+
+        .chat-resize {
+            position: absolute;
+            top: 0;
+            bottom: 0;
+            left: -4px;
+            width: 8px;
+            z-index: 1;
+            cursor: ew-resize;
+            touch-action: none;
+        }
+
+        .chat-resize::after {
+            content: '';
+            position: absolute;
+            top: 0;
+            bottom: 0;
+            left: 3px;
+            width: 2px;
+            background: transparent;
+            transition: background 0.15s ease;
+        }
+
+        .chat-resize:hover::after,
+        .chat-resize:focus-visible::after,
+        .chat-panel.resizing .chat-resize::after {
+            background: var(--primary-color);
+        }
+
+        .chat-resize:focus-visible {
+            outline: none;
         }
 
         .chat-header {
@@ -1670,6 +1708,8 @@
 
         .chat-form {
             display: flex;
+            /* Keep the Ask button its own height when the textarea is resized taller. */
+            align-items: flex-end;
             gap: 8px;
             padding: 12px var(--chat-gutter) 16px;
             border-top: 1px solid var(--border-color);
@@ -1707,6 +1747,11 @@
             font: inherit;
             font-weight: 600;
             cursor: pointer;
+        }
+
+        .chat-form .chat-send {
+            flex-shrink: 0;
+            height: 40px;
         }
 
         .chat-send.stop {
@@ -1785,6 +1830,11 @@
             .chat-trigger-label {
                 display: none;
             }
+
+            /* The drawer is (nearly) full width on phones; nothing to resize. */
+            .chat-resize {
+                display: none;
+            }
         }
     </style>
 </head>
@@ -1804,6 +1854,8 @@
     </div>
 
     <aside class="chat-panel" id="chat-panel" aria-label="Ask AI" aria-hidden="true">
+        <div class="chat-resize" id="chat-resize" role="separator" aria-orientation="vertical"
+             aria-label="Resize chat (drag, or use the arrow keys; double-click to reset)" tabindex="0"></div>
         <div class="chat-header">
             <span class="chat-title">Ask AI</span>
             <span class="chat-freshness" id="chat-freshness"></span>
@@ -1964,15 +2016,19 @@
                 flowchart: { htmlLabels: true, curve: 'basis' },
                 sequence: { mirrorActors: true, useMaxWidth: true }
             };
+            // Mermaid's default font (Trebuchet MS) is used nowhere else on the page, so
+            // Chrome on Windows could size label boxes before it was ready and then draw
+            // the wider real font, cutting the text off. The page font is already in use.
+            config.themeVariables = { fontFamily: getComputedStyle(document.body).fontFamily };
             if (!isDarkTheme()) {
-                config.themeVariables = {
+                Object.assign(config.themeVariables, {
                     primaryColor: '#2563eb',
                     primaryTextColor: '#334155',
                     primaryBorderColor: '#e2e8f0',
                     lineColor: '#64748b',
                     secondaryColor: '#f1f5f9',
                     tertiaryColor: '#f8fafc'
-                };
+                });
             }
             mermaid.initialize(config);
         }
@@ -2994,8 +3050,19 @@
         let mermaidRenderSeq = 0;
 
         // `root`: the page (default) or the chat, whose answers can hold diagrams too.
+        // True when a label is drawn wider or taller than the box Mermaid measured for it.
+        function mermaidLabelsClipped(element) {
+            return [...element.querySelectorAll('foreignObject')].some(function(fo) {
+                const label = fo.firstElementChild;
+                return label && (label.scrollWidth > fo.width.baseVal.value + 1 ||
+                    label.scrollHeight > fo.height.baseVal.value + 1);
+            });
+        }
+
         async function renderMermaidDiagrams(root) {
             const mermaidElements = (root || document.getElementById('content')).querySelectorAll('.mermaid');
+            // Label boxes are sized from text measured now, so let fonts finish loading first.
+            if (mermaidElements.length && document.fonts) await document.fonts.ready;
 
             for (let i = 0; i < mermaidElements.length; i++) {
                 const element = mermaidElements[i];
@@ -3005,9 +3072,13 @@
                 }
 
                 try {
-                    const renderId = 'mermaid-svg-' + (++mermaidRenderSeq);
-                    const { svg } = await mermaid.render(renderId, element.dataset.src);
-                    element.innerHTML = svg;
+                    // Measured before the font was ready: one more render sizes the boxes right.
+                    for (let attempt = 1; attempt <= 2; attempt++) {
+                        const renderId = 'mermaid-svg-' + (++mermaidRenderSeq);
+                        const { svg } = await mermaid.render(renderId, element.dataset.src);
+                        element.innerHTML = svg;
+                        if (!mermaidLabelsClipped(element)) break;
+                    }
                     makeMermaidZoomable(element);
                 } catch (error) {
                     console.error('Mermaid rendering error:', error);
@@ -3941,8 +4012,69 @@
             }
         }
 
+        // Drag the drawer's left edge (or focus it and press ←/→) to resize it.
+        // Text reflows on its own; the width is remembered per browser.
+        const CHAT_MIN_WIDTH = 320;
+
+        function setChatWidth(px, save) {
+            const panel = document.getElementById('chat-panel');
+            const max = Math.max(CHAT_MIN_WIDTH, Math.round(window.innerWidth * 0.9));
+            const width = Math.min(Math.max(Math.round(px), CHAT_MIN_WIDTH), max);
+            panel.style.setProperty('--chat-width', width + 'px');
+            if (save) {
+                try {
+                    localStorage.setItem('codewiki-chat-width', String(width));
+                } catch (e) {
+                    // Storage unavailable (private mode etc.) — width just won't persist
+                }
+            }
+        }
+
+        function setupChatResize() {
+            const panel = document.getElementById('chat-panel');
+            const handle = document.getElementById('chat-resize');
+            try {
+                const saved = parseInt(localStorage.getItem('codewiki-chat-width'), 10);
+                if (saved > 0) setChatWidth(saved, false);
+            } catch (e) {
+                // Storage unavailable — keep the default width
+            }
+
+            handle.addEventListener('pointerdown', function(e) {
+                if (e.button !== 0) return;
+                e.preventDefault();
+                handle.setPointerCapture(e.pointerId);
+                panel.classList.add('resizing');
+            });
+            handle.addEventListener('pointermove', function(e) {
+                if (handle.hasPointerCapture(e.pointerId)) setChatWidth(window.innerWidth - e.clientX, false);
+            });
+            const finish = function() {
+                if (!panel.classList.contains('resizing')) return;
+                panel.classList.remove('resizing');
+                setChatWidth(panel.getBoundingClientRect().width, true);
+            };
+            handle.addEventListener('pointerup', finish);
+            handle.addEventListener('lostpointercapture', finish);
+            handle.addEventListener('keydown', function(e) {
+                if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+                e.preventDefault();
+                const step = (e.shiftKey ? 80 : 20) * (e.key === 'ArrowLeft' ? 1 : -1);
+                setChatWidth(panel.getBoundingClientRect().width + step, true);
+            });
+            handle.addEventListener('dblclick', function() {
+                panel.style.removeProperty('--chat-width');
+                try {
+                    localStorage.removeItem('codewiki-chat-width');
+                } catch (e) {
+                    // Storage unavailable — nothing to clear
+                }
+            });
+        }
+
         function setupChat() {
             chatLoadState();
+            setupChatResize();
             document.getElementById('chat-trigger').addEventListener('click', openChat);
             document.getElementById('chat-close').addEventListener('click', closeChat);
             document.getElementById('chat-new').addEventListener('click', function() {

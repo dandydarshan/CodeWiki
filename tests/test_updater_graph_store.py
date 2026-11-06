@@ -149,6 +149,8 @@ def test_graph_writes_are_atomic(tmp_path):
 
 def test_graph_is_committed_with_the_docs_but_scratch_is_not(tmp_path):
     """The graph travels with the docs (so `--update` on any branch reuses them); scratch does not."""
+    from pathlib import Path
+
     from codewiki.src.be.dependency_analyzer import DependencyGraphBuilder
 
     repo = tmp_path / "repo"
@@ -157,7 +159,8 @@ def test_graph_is_committed_with_the_docs_but_scratch_is_not(tmp_path):
     _git(tmp_path, "init", "-q", str(repo))
     config = _config(repo)
     DependencyGraphBuilder(config).build_dependency_graph()
-    graph = os.path.relpath(find_any_graph_file(config.dependency_graph_dir), repo)
+    # git prints / even on Windows
+    graph = Path(os.path.relpath(find_any_graph_file(config.dependency_graph_dir), repo)).as_posix()
     with open(
         os.path.join(config.dependency_graph_dir, "repo_dependency_graph.prev.json"), "w"
     ) as f:

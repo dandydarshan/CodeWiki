@@ -188,6 +188,8 @@ def save_graph(graph: dict[str, Node], path: str) -> None:
         d = node.model_dump()
         if isinstance(d.get("depends_on"), set):
             d["depends_on"] = sorted(d["depends_on"])
+        if d.get("relative_path"):  # never an absolute path in a committed file
+            d["file_path"] = d["relative_path"]
         result[cid] = d
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
     file_manager.save_json(result, path, indent=2)  # atomic: other processes may be reading

@@ -281,3 +281,24 @@ def test_docs_in_the_repo_root_or_outside_git_are_never_deleted(tmp_path):
     plain = tmp_path / "plain" / "docs"
     plain.mkdir(parents=True)
     assert not _committed_and_clean(plain)
+
+
+def test_saved_graph_holds_no_absolute_paths(tmp_path):
+    """The graph is committed with the docs; an absolute path would publish the checkout location."""
+    from codewiki.src.be.dependency_analyzer import DependencyGraphBuilder
+    from codewiki.src.be.updater.graph_store import load_graph, save_graph
+
+    repo = tmp_path / "repo"
+    (repo / "pkg").mkdir(parents=True)
+    (repo / "pkg" / "a.py").write_text("def f():\n    return 1\n")
+    config = _config(repo)
+    components, _ = DependencyGraphBuilder(config).build_dependency_graph()
+    path = find_any_graph_file(config.dependency_graph_dir)
+
+    assert str(tmp_path) not in open(path, encoding="utf-8").read()
+    assert {n.file_path for n in load_graph(path).values()} == {"pkg/a.py"}
+    # Generation keeps reading source through the in-memory absolute paths.
+    assert all(os.path.isabs(c.file_path) for c in components.values())
+
+    save_graph(components, str(tmp_path / "copy.json"))  # the updater's writer too
+    assert str(tmp_path) not in (tmp_path / "copy.json").read_text(encoding="utf-8")

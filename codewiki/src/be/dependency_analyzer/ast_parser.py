@@ -204,6 +204,10 @@ class DependencyParser:
             component_dict = component.model_dump()
             if "depends_on" in component_dict and isinstance(component_dict["depends_on"], set):
                 component_dict["depends_on"] = list(component_dict["depends_on"])
+            # The saved graph is committed with the docs: an absolute path would publish the
+            # checkout's location (e.g. C:/Users/<name>/...). Nothing reads file_path back from disk.
+            if component_dict.get("relative_path"):
+                component_dict["file_path"] = component_dict["relative_path"]
             result[component_id] = component_dict
 
         dir_name = os.path.dirname(output_path)

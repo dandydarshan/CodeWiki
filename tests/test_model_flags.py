@@ -5,6 +5,7 @@ from types import SimpleNamespace
 import pytest
 from click.testing import CliRunner
 
+import codewiki.cli.adapters.doc_generator as doc_generator
 import codewiki.cli.commands.generate as gen
 
 
@@ -53,7 +54,7 @@ def captured(tmp_path, monkeypatch):
         raise Stop
 
     monkeypatch.setattr(gen, "ConfigManager", FakeManager)
-    monkeypatch.setattr(gen, "CLIDocumentationGenerator", fake_generator)
+    monkeypatch.setattr(doc_generator, "CLIDocumentationGenerator", fake_generator)
     (tmp_path / "a.py").write_text("def f():\n    return 1\n")
     monkeypatch.chdir(tmp_path)
     return seen

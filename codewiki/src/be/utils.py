@@ -1,5 +1,7 @@
 import asyncio
+import contextlib
 import importlib.util
+import io
 import logging
 import os
 import re
@@ -271,7 +273,10 @@ async def _try_pythonmonkey_parse(diagram_content: str) -> str | None:
 async def _parse_with_pythonmonkey(diagram_content: str) -> None:
     """Parse on the main thread; importing here keeps the import there too."""
     try:
-        from mermaid_parser.parser import parse_mermaid_py
+        # mermaid_parser/__init__ imports mermaid-py, which print()s "IPython is not
+        # installed" on import (it's about its Jupyter magic, which we never use).
+        with contextlib.redirect_stdout(io.StringIO()):
+            from mermaid_parser.parser import parse_mermaid_py
     except Exception as e:
         raise ImportError("PythonMonkey is unavailable") from e
     await parse_mermaid_py(diagram_content)

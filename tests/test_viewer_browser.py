@@ -390,3 +390,17 @@ def test_chat_says_when_the_browser_blocks_localhost(site, browser):
             ctx.close()
     finally:
         public.close()
+
+
+def test_a_site_not_served_by_codewiki_does_not_probe_its_own_origin(site, browser):
+    ctx = browser.new_context()
+    pg = ctx.new_page()
+    probes = []
+    pg.on("request", lambda r: probes.append(r.url) if r.url.endswith("/api/health") else None)
+    pg.goto(site + "/")
+    pg.wait_for_selector(".nav-item")
+    pg.click("#chat-trigger")
+    pg.wait_for_selector(".chat-offline")
+    assert probes, "the configured localhost ports are still probed"
+    assert not [u for u in probes if u.startswith(site + "/")]  # no 404 on the site's own origin
+    ctx.close()

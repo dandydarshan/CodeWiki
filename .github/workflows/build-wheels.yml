@@ -39,9 +39,11 @@ jobs:
     env:
       PYVER: ${{ matrix.python }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: ${{ matrix.python }}
 
@@ -67,7 +69,7 @@ jobs:
           "$RUNNER_TEMP/smoke/Scripts/python" -m codewiki --help
           bash "$GITHUB_WORKSPACE/packaging/build/test_wheel.sh" "$RUNNER_TEMP/smoke/Scripts/python" "$GITHUB_WORKSPACE"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: codewiki-wheel-windows-x86_64-py${{ matrix.python }}
           path: dist/*.whl
@@ -78,12 +80,14 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
 
       # cibuildwheel builds every version in `build =` of
       # packaging/build/cibw.toml inside the manylinux container. These host
       # interpreters are only for running cibuildwheel and the smoke tests.
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: |
             3.12
@@ -109,7 +113,7 @@ jobs:
             echo "::endgroup::"
           done
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: codewiki-wheel-linux-x86_64-all-py
           path: dist-linux/*.whl
@@ -130,9 +134,11 @@ jobs:
     env:
       PYVER: ${{ matrix.python }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: ${{ matrix.python }}
 
@@ -171,7 +177,7 @@ jobs:
           "$RUNNER_TEMP/smoke/bin/python" -m codewiki --help
           bash "$GITHUB_WORKSPACE/packaging/build/test_wheel.sh" "$RUNNER_TEMP/smoke/bin/python" "$GITHUB_WORKSPACE"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: codewiki-wheel-macos-universal2-py${{ matrix.python }}
           path: wheelhouse/*.whl
@@ -189,13 +195,15 @@ jobs:
     steps:
       # Only for tests/ and packaging/build/test_wheel.sh; the wheel comes
       # from the macOS job.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: ${{ matrix.python }}
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
         with:
           name: codewiki-wheel-macos-universal2-py${{ matrix.python }}
           path: wheelhouse
@@ -224,7 +232,9 @@ jobs:
     permissions:
       id-token: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
 
       - name: Check tag matches pyproject version
         run: |
@@ -234,7 +244,7 @@ jobs:
             exit 1
           fi
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
         with:
           pattern: codewiki-wheel-*
           path: dist
@@ -250,4 +260,4 @@ jobs:
             exit 1
           fi
 
-      - uses: pypa/gh-action-pypi-publish@release/v1
+      - uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086 # release/v1

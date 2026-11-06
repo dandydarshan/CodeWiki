@@ -51,7 +51,9 @@ def documented_source(node: Node) -> str:
 
 
 def body_hash(node: Node) -> str:
-    return hashlib.sha1(normalize_body(documented_source(node)).encode("utf-8")).hexdigest()
+    return hashlib.sha1(
+        normalize_body(documented_source(node)).encode("utf-8"), usedforsecurity=False
+    ).hexdigest()
 
 
 def signature(node: Node) -> dict[str, Any]:

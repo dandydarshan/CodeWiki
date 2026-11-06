@@ -53,3 +53,16 @@ class FileManager:
 
 
 file_manager = FileManager()
+
+
+def portable_repo_path(repo_path: str, docs_dir: str) -> Optional[str]:
+    """``repo_path`` relative to ``docs_dir`` (usually ``..``), for files published with the docs.
+
+    An absolute path would reveal where the checkout lives (``C:/Users/<name>/...``).
+    None when no relative path exists (another drive on Windows).
+    """
+    try:
+        rel = os.path.relpath(os.path.abspath(repo_path), os.path.abspath(docs_dir))
+    except ValueError:
+        return None
+    return rel.replace(os.sep, "/")

@@ -2988,18 +2988,12 @@
             // Convert markdown to HTML using marked
             let html = sanitizeHtml(marked.parse(markdown));
 
-            // Process mermaid code blocks
+            // Process mermaid code blocks. Keep the code HTML-escaped: the browser decodes it
+            // back to text, so the element's textContent is the exact diagram source. Decoding
+            // it here put `<…>` in the page as real, unsanitized HTML (tags lost, scripts run).
             html = html.replace(
                 /<pre><code class="language-mermaid">([\s\S]*?)<\/code><\/pre>/g,
-                (match, code) => {
-                    const decodedCode = code
-                        .replace(/&lt;/g, '<')
-                        .replace(/&gt;/g, '>')
-                        .replace(/&amp;/g, '&')
-                        .replace(/&quot;/g, '"')
-                        .replace(/&#39;/g, "'");
-                    return '<div class="mermaid">' + decodedCode + '</div>';
-                }
+                (match, code) => '<div class="mermaid">' + code + '</div>'
             );
 
             return html;

@@ -305,3 +305,32 @@ def test_angle_brackets_survive_into_the_diagram(page):
         RENDERED, "classDiagram\n class Shape{\n  <<interface>>\n }\n Shape <|-- Circle"
     )
     assert "interface" in stereo and "<interface>" not in stereo
+
+
+# Through the real path a docs page takes: markdown -> renderMarkdown -> renderMermaidDiagrams.
+FROM_MARKDOWN = """async (md) => {
+    const box = document.createElement('div');
+    box.innerHTML = renderMarkdown(md);
+    document.getElementById('content').appendChild(box);
+    await renderMermaidDiagrams(box);
+    await new Promise(r => setTimeout(r, 300));  // let any injected <img> fire its onerror
+    const svg = box.querySelector('svg');
+    const text = svg ? svg.textContent : 'NO SVG';
+    box.remove();
+    return [text, window.__probe === 1];
+}"""
+
+
+def test_markdown_diagrams_keep_angle_brackets_and_run_no_html(page):
+    page.wait_for_selector("#content .mermaid svg")
+    md = (
+        "```mermaid\nflowchart TD\n"
+        "  A -->|contains <cpm-sdk-app-root>| B[Map<String, List<Integer>>]\n"
+        "  B --> C[Read & write]\n"
+        "  C --> D[<img src=x onerror=window.__probe=1>]\n```\n"
+    )
+    text, probe_ran = page.evaluate(FROM_MARKDOWN, md)
+    assert "contains <cpm-sdk-app-root>" in text
+    assert "Map<String, List<Integer>>" in text
+    assert "Read & write" in text
+    assert not probe_ran  # HTML inside a diagram is shown as text, never executed

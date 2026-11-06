@@ -783,18 +783,8 @@ _OVERVIEW_PYDANTIC_TOOL_GUIDANCE = (
 )
 
 
-def merge_overview_system_prompt(base: str | None, tool_guidance: str) -> str:
-    """Append backend-specific overview tool guidance to custom-instructions system text."""
-    if base:
-        return f"{base}\n\n{tool_guidance}"
-    return tool_guidance
-
-
 def append_pydantic_overview_tool_guidance(base: str | None) -> str:
     """Custom-instructions system text plus pydantic-ai overview tool guidance."""
-    return merge_overview_system_prompt(base, _OVERVIEW_PYDANTIC_TOOL_GUIDANCE)
-
-
-def format_overview_agent_system_prompt(custom_instructions: str | None = None) -> str:
-    """System message for pydantic-ai overview agents (custom instructions + tool guidance)."""
-    return append_pydantic_overview_tool_guidance(format_overview_system_prompt(custom_instructions))
+    if base:
+        return f"{base}\n\n{_OVERVIEW_PYDANTIC_TOOL_GUIDANCE}"
+    return _OVERVIEW_PYDANTIC_TOOL_GUIDANCE

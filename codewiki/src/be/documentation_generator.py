@@ -2,6 +2,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import traceback
 from copy import deepcopy
 from typing import Any
@@ -47,6 +48,14 @@ from codewiki.src.utils import file_manager
 
 # Configure logging and monitoring
 logger = logging.getLogger(__name__)
+
+# Tool calls a model wrote as text instead of calling the tool: Kimi's special
+# tokens (or the `functions.<name>:<n>` line left once they are stripped) and
+# Hermes/Qwen-style tags. Publishing these would put raw tool calls in the wiki.
+_LEAKED_TOOL_CALL_RE = re.compile(
+    r"<\|tool_calls?_(?:section_)?begin\|>|<tool_call>|^\s*functions\.\w+:\d+",
+    re.MULTILINE,
+)
 
 
 class IncompleteDocumentationError(Exception):
@@ -460,14 +469,28 @@ class DocumentationGenerator:
 
         phase = "overview" if not module_path else "parent_modules"
         try:
-            with self.usage_ledger.in_phase(phase, target=module_name):
-                parent_docs = await self.backend.run_overview_agent(
-                    prompt,
-                    system_prompt=format_overview_system_prompt(
-                        self.config.get_prompt_addition()
-                    ),
-                    working_dir=working_dir,
-                    target=module_name,
+            # One retry: a model that wrote its tool call as text often calls it properly next time.
+            for attempt in (1, 2):
+                with self.usage_ledger.in_phase(phase, target=module_name):
+                    parent_docs = await self.backend.run_overview_agent(
+                        prompt,
+                        system_prompt=format_overview_system_prompt(
+                            self.config.get_prompt_addition()
+                        ),
+                        working_dir=working_dir,
+                        target=module_name,
+                    )
+                if not (parent_docs and _LEAKED_TOOL_CALL_RE.search(parent_docs)):
+                    break
+                logger.warning(
+                    f"Overview for {module_name} contains tool-call text instead of a "
+                    f"tool call (attempt {attempt}/2)"
+                )
+            else:
+                raise RuntimeError(
+                    f"Overview for {module_name} still contains raw tool-call text after a "
+                    f"retry; the model is not calling tools properly (check the provider's "
+                    f"tool-call parser)"
                 )
             if not parent_docs:
                 raise RuntimeError(

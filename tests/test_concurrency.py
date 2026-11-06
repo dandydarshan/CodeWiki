@@ -111,6 +111,9 @@ class _SlowBackend:
         self.finished.append(module_name)
         return json.loads(Path(working_dir, "module_tree.json").read_text())
 
+    async def run_overview_agent(self, prompt, *, system_prompt=None, **_):
+        return self.complete(prompt, system_prompt=system_prompt)
+
     def complete(self, prompt, model=None, system_prompt=None):
         self.finished.append("<overview>")
         return "<OVERVIEW>overview</OVERVIEW>"

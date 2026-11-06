@@ -236,7 +236,6 @@ class LLMBackend(abc.ABC):
                 self.complete, prompt, model=model, system_prompt=system_prompt
             )
 
-    @abc.abstractmethod
     async def run_overview_agent(
         self,
         prompt: str,
@@ -248,9 +247,12 @@ class LLMBackend(abc.ABC):
         """Generate a parent or repository overview.
 
         ``system_prompt`` is the shared custom-instructions block from
-        :func:`~codewiki.src.be.prompt_template.format_overview_system_prompt`;
-        each backend appends its own tool guidance before calling the model.
+        :func:`~codewiki.src.be.prompt_template.format_overview_system_prompt`.
+        The default is a single completion, enough for backends whose CLI reads
+        the child docs itself (claude-code / codex); API backends without file
+        access override this with a tool-using agent.
         """
+        return await self.complete_async(prompt, system_prompt=system_prompt)
 
     @abc.abstractmethod
     def complete(

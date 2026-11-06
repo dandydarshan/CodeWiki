@@ -50,7 +50,7 @@ def _safe_filename(component_id: str) -> str:
     names unique.
     """
     sanitized = re.sub(r"[^\w\-.]", "__", component_id)[:180]
-    hash_suffix = hashlib.sha1(component_id.encode()).hexdigest()[:8]
+    hash_suffix = hashlib.sha1(component_id.encode(), usedforsecurity=False).hexdigest()[:8]
     return f"{sanitized}_{hash_suffix}.src"
 
 

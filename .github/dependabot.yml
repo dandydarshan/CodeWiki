@@ -1,0 +1,27 @@
+version: 2
+updates:
+  - package-ecosystem: pip
+    directory: "/"
+    schedule:
+      interval: weekly
+    # Waiting a week before bumping skips releases that are yanked or compromised.
+    cooldown:
+      default-days: 7
+    # One PR per week for routine bumps; security fixes still get their own PRs.
+    groups:
+      python-deps:
+        update-types: [minor, patch]
+    ignore:
+      # mcp 2 dropped FastMCP, which the vendored caw builds on (see pyproject.toml).
+      - dependency-name: mcp
+        update-types: [version-update:semver-major]
+
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    groups:
+      actions:
+        patterns: ["*"]

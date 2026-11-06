@@ -269,7 +269,7 @@ def _cluster_via_llm(
             response_content = response.split("<GROUPED_COMPONENTS>")[1].split(
                 "</GROUPED_COMPONENTS>"
             )[0]
-            module_tree = eval(response_content)
+            module_tree = ast.literal_eval(response_content.strip())
         else:
             module_tree = _untagged_module_dict(response)
             if module_tree is None:

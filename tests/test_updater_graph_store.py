@@ -302,3 +302,52 @@ def test_saved_graph_holds_no_absolute_paths(tmp_path):
 
     save_graph(components, str(tmp_path / "copy.json"))  # the updater's writer too
     assert str(tmp_path) not in (tmp_path / "copy.json").read_text(encoding="utf-8")
+
+
+def test_codewikis_own_output_is_not_analysed_as_repo_code(tmp_path):
+    """A second run used to add the copied helper script (~17 functions) to the user's code."""
+    import shutil
+
+    from codewiki.src.be.dependency_analyzer import DependencyGraphBuilder
+    from codewiki.src.config import MODULE_TREE_OWNERSHIP_VALIDATOR, Config
+
+    def analysed_files(repo, docs_dir):
+        config = Config(
+            repo_path=str(repo),
+            output_dir=str(tmp_path / "out"),
+            dependency_graph_dir=str(tmp_path / "out" / "graphs"),
+            docs_dir=str(docs_dir),
+            max_depth=2,
+            llm_base_url="x",
+            llm_api_key="x",
+            main_model="x",
+            cluster_model="x",
+        )
+        components, _ = DependencyGraphBuilder(config).build_dependency_graph()
+        return {n.relative_path for n in components.values()}
+
+    repo = tmp_path / "repo"
+    (repo / "pkg").mkdir(parents=True)
+    (repo / "pkg" / "a.py").write_text("def f():\n    return 1\n")
+    (repo / "docs" / "temp").mkdir(parents=True)
+    script = os.path.join(
+        os.path.dirname(__file__),
+        "..",
+        "codewiki",
+        "templates",
+        "docs",
+        MODULE_TREE_OWNERSHIP_VALIDATOR,
+    )
+    shutil.copy(script, repo / "docs" / MODULE_TREE_OWNERSHIP_VALIDATOR)  # as `generate` does
+    shutil.copy(script, repo / "pkg" / MODULE_TREE_OWNERSHIP_VALIDATOR)  # a real source copy
+    (repo / "docs" / "temp" / "cache.py").write_text("def cached():\n    return 1\n")
+    (repo / "docs" / "conf.py").write_text("def setup(app):\n    return app\n")  # the user's own
+
+    files = analysed_files(repo, repo / "docs")
+    assert "pkg/a.py" in files and "docs/conf.py" in files
+    assert f"pkg/{MODULE_TREE_OWNERSHIP_VALIDATOR}" in files
+    assert f"docs/{MODULE_TREE_OWNERSHIP_VALIDATOR}" not in files
+    assert not any(f.startswith("docs/temp/") for f in files)
+
+    files = analysed_files(repo, repo)  # docs written to the repo root: exclude nothing
+    assert "pkg/a.py" in files and "docs/conf.py" in files

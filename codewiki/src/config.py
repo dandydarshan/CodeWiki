@@ -17,6 +17,8 @@ FIRST_MODULE_TREE_FILENAME = "first_module_tree.json"
 MODULE_TREE_FILENAME = "module_tree.json"
 OVERVIEW_FILENAME = "overview.md"
 SEARCH_INDEX_FILENAME = "search_index.json"
+# Helper script `generate` copies into the docs folder (generated output, never analysed)
+MODULE_TREE_OWNERSHIP_VALIDATOR = "validate_module_tree_ownership.py"
 # `codewiki serve` listens on the first free port of DEFAULT_QA_PORT..+QA_PORT_COUNT-1 (one per
 # repo served at once); the docs site looks for its own repo's server on those ports.
 DEFAULT_QA_PORT = 8765

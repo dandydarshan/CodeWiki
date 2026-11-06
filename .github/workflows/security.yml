@@ -1,0 +1,45 @@
+name: Security
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  # New CVEs are published against code that has not changed, so rescan weekly.
+  schedule:
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  security:
+    name: Security scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.12"
+
+      - name: Install scanners
+        run: pip install pip-audit ruff zizmor
+
+      # Every pin is exact, so skip resolution (it would build PythonMonkey, which needs npm).
+      - name: Audit dependencies for known CVEs
+        run: pip-audit --no-deps --progress-spinner off -r requirements.txt
+
+      # Bandit rules. Ignored: assert, try/except/pass, and list-form subprocess
+      # calls, which are the normal way to run git/node here.
+      - name: Scan code for risky patterns
+        run: ruff check --select S --ignore S101,S110,S603,S607 --output-format=github codewiki
+
+      - name: Audit GitHub Actions and Dependabot config
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: zizmor --min-severity medium --format github .github

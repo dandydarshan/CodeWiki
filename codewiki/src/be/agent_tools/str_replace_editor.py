@@ -552,7 +552,7 @@ class EditTool:
 
             # Hidden entries are skipped except `.github` (CI workflows are
             # documentation-relevant artifacts the agent must be able to find).
-            out = subprocess.run(
+            out = subprocess.run(  # noqa: S602 -- path is shlex-quoted
                 rf"find {shlex.quote(str(path))} -maxdepth 2 "
                 r"\( -not -path '*/.*' -o -name .github -o -path '*/.github/*' \)",
                 shell=True,

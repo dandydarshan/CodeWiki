@@ -51,7 +51,7 @@ def page_hashes(docs_dir: str) -> dict[str, str]:
     for stem, rel in L.list_doc_files(docs_dir).items():
         try:
             with open(os.path.join(docs_dir, rel), "rb") as f:
-                out[stem] = hashlib.sha1(f.read()).hexdigest()
+                out[stem] = hashlib.sha1(f.read(), usedforsecurity=False).hexdigest()
         except OSError:
             continue
     return out

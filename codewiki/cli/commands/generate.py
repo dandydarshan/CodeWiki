@@ -11,7 +11,6 @@ from pathlib import Path
 
 import click
 
-from codewiki.cli.adapters.doc_generator import CLIDocumentationGenerator
 from codewiki.cli.config_manager import ConfigManager
 from codewiki.cli.models.config import AgentInstructions
 from codewiki.cli.utils.branding import print_banner
@@ -809,6 +808,10 @@ def generate_command(
         # Create generator
         # Get commit_id early so it can be stored in metadata.json for --update support
         commit_id = get_git_commit_hash(repo_path)
+        # Imported here: it loads pydantic-ai, openai and MCP (~0.8 s), which every
+        # other command, even --version, would otherwise pay at startup.
+        from codewiki.cli.adapters.doc_generator import CLIDocumentationGenerator
+
         generator = CLIDocumentationGenerator(
             repo_path=repo_path,
             output_dir=output_dir,

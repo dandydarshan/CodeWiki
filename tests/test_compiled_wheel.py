@@ -325,3 +325,5 @@ def test_caw_mermaid_validation_through_pythonmonkey(loop_thread):
         proc.stdout[-2000:],
         proc.stderr[-3000:],
     )
+    # mermaid-py's import-time Jupyter notice must not reach users' terminals.
+    assert "IPython is not installed" not in proc.stdout, proc.stdout[-2000:]

@@ -96,6 +96,7 @@ Thumbs.db
 !tests/test_chat_browser.py
 !tests/test_viewer_browser.py
 !tests/test_overview_agent.py
+!tests/test_cli_startup.py
 
 # Compiled-wheel build outputs (packaging/build/*)
 buildenv/

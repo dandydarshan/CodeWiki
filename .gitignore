@@ -97,6 +97,7 @@ Thumbs.db
 !tests/test_viewer_browser.py
 !tests/test_overview_agent.py
 !tests/test_cli_startup.py
+!tests/test_generate_branch_context.py
 
 # Compiled-wheel build outputs (packaging/build/*)
 buildenv/

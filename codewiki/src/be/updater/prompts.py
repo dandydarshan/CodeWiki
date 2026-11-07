@@ -50,6 +50,8 @@ bring the affected documentation pages up to date with the smallest correct edit
    (raw angle brackets are read as HTML and removed). Links between pages are relative to the linking page,
    using the page paths shown in the WRITE SET and the MODULE TREE: `[text](page.md)`,
    `[text](../page.md)`, `[text](sub/page.md)`.
+6. A page may end with a `<!-- codewiki:summary ... -->` comment that parent overviews are
+   written from. When you edit the leaf page, keep it true (add one in that form if missing).
 </RULES>
 
 <OUTPUT>

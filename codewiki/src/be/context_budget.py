@@ -127,6 +127,24 @@ def input_budget(window: int, max_output_tokens: int, token_ratio: float = 1.0) 
     return max(int(available / max(token_ratio, 1.0)), 0)
 
 
+# A first prompt may use this share of the input budget; the rest is left for the
+# agent's tool calls and their results (reading more code, writing the page).
+FIRST_PROMPT_SHARE = 0.6
+
+
+def prompt_budget(config, model_name: str | None = None, share: float = FIRST_PROMPT_SHARE) -> int:
+    """Tokens a first prompt to ``model_name`` (default: the main model) may use.
+
+    From ``max_context_tokens`` or the window learned from an earlier provider
+    error (same key as the model's requests); 0 while the window is unknown.
+    """
+    model = model_name or getattr(config, "main_model", "") or ""
+    learned = get_limit((getattr(config, "llm_base_url", "") or "", model))
+    window = getattr(config, "max_context_tokens", 0) or learned.window
+    max_output = getattr(config, "max_tokens", 0) or 0
+    return int(input_budget(window, max_output, learned.token_ratio) * share)
+
+
 def _part_text(part) -> str | None:
     """The text a part contributes to the request, or None if not textual."""
     if isinstance(part, ToolReturnPart):

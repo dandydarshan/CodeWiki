@@ -129,6 +129,45 @@ def _clip(text: str, tokens: int) -> str:
     return prefix + _TRUNCATED
 
 
+_SUMMARY = re.compile(r"<!--\s*codewiki:summary\s*(.*?)-->", re.DOTALL)
+_FENCE = re.compile(r"^\s*(`{3,}|~{3,})")
+_HEADING = re.compile(r"^#{1,6}\s+\S")
+
+
+def page_summary(text: str) -> str | None:
+    """The summary a page wrote for its parent (PAGE_SUMMARY_GUIDANCE), if any."""
+    match = _SUMMARY.search(text)
+    return match.group(1).strip() or None if match else None
+
+
+def condensed_child(text: str) -> str:
+    """A child page cut down to what an overview needs, without cutting it off:
+    its own summary when it has one, then every heading with its first paragraph."""
+    lines: list[str] = []
+    fence = None
+    take = got = False  # in the paragraph after a heading / took a line of it
+    for line in _SUMMARY.sub("", text).splitlines():
+        marker = _FENCE.match(line)
+        if fence is not None or marker:
+            # Diagrams and code are left to the child page.
+            if fence is None:
+                fence = marker.group(1)
+            elif marker and marker.group(1)[0] == fence[0] and len(marker.group(1)) >= len(fence):
+                fence = None
+            continue
+        if _HEADING.match(line.strip()):
+            lines += ["", line.strip()]
+            take, got = True, False
+        elif not line.strip():
+            take = take and not got
+        elif take:
+            lines.append(line.rstrip())
+            got = True
+    outline = "\n".join(lines).strip()
+    summary = page_summary(text)
+    return f"Summary: {summary}\n\n{outline}" if summary else outline
+
+
 def bounded_overview_prompt(
     base: str,
     children: dict[str, str],
@@ -136,8 +175,15 @@ def bounded_overview_prompt(
     *,
     correction: str = "",
     previous: str = "",
+    budget_tokens: int = 0,
 ) -> str:
-    """Fairly distribute the remaining input budget over immediate child docs."""
+    """Fairly distribute the remaining input budget over immediate child docs.
+
+    ``budget_tokens`` comes from the model's context window (0 = unknown, use
+    OVERVIEW_INPUT_TOKENS). Children that do not fit are condensed to their
+    summary and outline, largest first, before any is clipped.
+    """
+    limit = budget_tokens or OVERVIEW_INPUT_TOKENS
     suffix = ""
     if correction:
         suffix = (
@@ -164,9 +210,17 @@ def bounded_overview_prompt(
     # Empty excerpts still reserve labels and omission markers.
     allocations = dict.fromkeys(children, 0)
     mandatory = render(allocations)
-    remaining = OVERVIEW_INPUT_TOKENS - count_tokens((system or "") + mandatory) - 64
+    remaining = limit - count_tokens((system or "") + mandatory) - 64
     if remaining < 0 or len((system or "") + mandatory) > MAX_USER_PROMPT_CHARS:
         raise RuntimeError("Mandatory overview context exceeds the input budget")
+    for name in sorted(children, key=sizes.get, reverse=True):
+        if sum(sizes.values()) <= remaining:
+            break
+        condensed = condensed_child(children[name])
+        # A page without headings or summary has no outline; it is clipped instead.
+        if condensed.strip() and len(condensed) < len(children[name]):
+            children = {**children, name: condensed}  # same order
+            sizes[name] = count_tokens(condensed)
     pending = set(children)
     while pending and remaining:
         share = max(1, remaining // len(pending))
@@ -181,7 +235,7 @@ def bounded_overview_prompt(
     prompt = render(allocations)
     # Token concatenation and long whitespace tokens can affect either cap.
     while (
-        count_tokens((system or "") + prompt) > OVERVIEW_INPUT_TOKENS
+        count_tokens((system or "") + prompt) > limit
         or len((system or "") + prompt) > MAX_USER_PROMPT_CHARS
     ):
         if not any(allocations.values()):

@@ -303,6 +303,11 @@ MODULE_TREE_FOCUSED_NOTE = (
     "read their documentation pages or use your code-reading tools for detail."
 )
 
+CLUSTER_TREE_FOCUSED_NOTE = (
+    "NOTE: components are listed for this module, its parent, siblings and children; "
+    "other modules are listed by name."
+)
+
 FILES_NOT_INLINED_NOTE = (
     "NOTE: these files belong to this module but did not fit in this prompt. Document them "
     "like the inlined files. Read each whole file with `str_replace_editor` "
@@ -595,6 +600,21 @@ def related_module_paths(
     return related
 
 
+def _module_path(module_tree: dict[str, Any], name: str | None) -> list[str]:
+    """Path of the first module called ``name`` (module names are unique in a wiki)."""
+
+    def find(tree: dict[str, Any], prefix: list[str]) -> list[str] | None:
+        for key, node in tree.items():
+            if key == name:
+                return prefix + [key]
+            found = find(node.get("children") or {}, prefix + [key])
+            if found:
+                return found
+        return None
+
+    return (find(module_tree, []) or []) if name else []
+
+
 def _prompt_fits(text: str, max_chars: int, max_tokens: int) -> bool:
     if len(text) > max_chars:
         return False
@@ -767,9 +787,13 @@ def format_cluster_prompt(
     potential_core_components: str,
     module_tree: dict[str, any] | None = None,
     module_name: str | None = None,
+    max_tokens: int = 0,
 ) -> str:
     """
     Format the cluster prompt with potential core components and module tree.
+
+    ``max_tokens`` is the budget from the model's context window (0 = unknown;
+    the character cap codex enforces applies either way).
     """
     if module_tree is None:
         module_tree = {}
@@ -777,14 +801,19 @@ def format_cluster_prompt(
     if module_tree == {}:
         return CLUSTER_REPO_PROMPT.format(potential_core_components=potential_core_components)
 
-    formatted_module_tree = _format_module_tree_str(module_tree, module_name)
+    detailed = related_module_paths(module_tree, _module_path(module_tree, module_name), [], {})
+    formatted_module_tree = (
+        CLUSTER_TREE_FOCUSED_NOTE
+        + "\n\n"
+        + _format_module_tree_str(module_tree, module_name, detailed=detailed)
+    )
     prompt = CLUSTER_MODULE_PROMPT.format(
         potential_core_components=potential_core_components,
         module_tree=formatted_module_tree,
         module_name=module_name,
     )
 
-    if len(prompt) > MAX_USER_PROMPT_CHARS:
+    if not _prompt_fits(prompt, MAX_USER_PROMPT_CHARS, max_tokens):
         full_len = len(prompt)
         formatted_module_tree = (
             MODULE_TREE_TRIMMED_NOTE
@@ -797,11 +826,10 @@ def format_cluster_prompt(
             module_name=module_name,
         )
         logger.warning(
-            "Module %s: cluster prompt (%d chars) exceeds %d; "
+            "Module %s: cluster prompt (%d chars) does not fit the model input; "
             "module tree trimmed to names only (%d chars)",
             module_name,
             full_len,
-            MAX_USER_PROMPT_CHARS,
             len(prompt),
         )
 

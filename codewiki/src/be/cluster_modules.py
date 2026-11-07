@@ -9,18 +9,19 @@ from typing import Any
 import httpx
 from openai import APIConnectionError
 
+from codewiki.src.be.context_budget import prompt_budget
 from codewiki.src.be.dependency_analyzer.models.core import Node
 from codewiki.src.be.dependency_analyzer.utils.paths import normalize_module_tree_ids
 from codewiki.src.be.llm_services import call_llm
 from codewiki.src.be.module_naming import resolve_unique_name, sanitize_module_name
 from codewiki.src.be.module_scope import (
-    complete_file_candidates,
     coalesce_small_modules,
+    complete_file_candidates,
     component_files,
     file_token_counts,
     get_module_token_count,
-    normalize_module_partition,
     nearest_module,
+    normalize_module_partition,
     validate_module_file_coverage,
 )
 from codewiki.src.be.prompt_template import format_cluster_prompt, format_super_group_prompt
@@ -259,7 +260,11 @@ def _cluster_via_llm(
     """
     potential_core_components, _ = format_potential_core_components(leaf_nodes, components)
     prompt = format_cluster_prompt(
-        potential_core_components, current_module_tree, current_module_name
+        potential_core_components,
+        current_module_tree,
+        current_module_name,
+        # One completion: the whole input budget, nothing kept for tool results.
+        max_tokens=prompt_budget(config, getattr(config, "cluster_model", None), share=1.0),
     )
     if completer is not None:
         response = completer(prompt)

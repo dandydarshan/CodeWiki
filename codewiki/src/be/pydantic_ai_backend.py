@@ -18,27 +18,28 @@ from pydantic_ai import Agent
 from pydantic_ai.usage import UsageLimits
 
 from codewiki.src.be.agent_tools.deps import CodeWikiDeps
+from codewiki.src.be.agent_tools.doc_guard import run_until_doc_written
 from codewiki.src.be.agent_tools.generate_sub_module_documentations import (
     generate_sub_module_documentation_tool,
 )
 from codewiki.src.be.agent_tools.read_code_components import read_code_components_tool
-from codewiki.src.be.agent_tools.read_module_documentation import (
-    OverviewDeps,
-    read_module_documentation_tool,
-)
 from codewiki.src.be.agent_tools.str_replace_editor import str_replace_editor_tool
-from codewiki.src.be.backend import AgentReply, LLMBackend, usage_to_dict
+from codewiki.src.be.api_usage import track_usage, record_response
+from codewiki.src.be.backend import AgentReply, LLMBackend, UsageLedger, usage_to_dict
 from codewiki.src.be.dependency_analyzer.models.core import Node
 from codewiki.src.be.llm_services import call_llm, create_fallback_models, pop_last_usage
+from codewiki.src.be.module_scope import (
+    can_split_module,
+    complete_file_candidates,
+    validate_module_file_coverage,
+)
+from codewiki.src.be.overview_support import reusable_overview, root_recovery_prompt
 from codewiki.src.be.prompt_template import (
-    append_pydantic_overview_tool_guidance,
     format_leaf_system_prompt,
     format_system_prompt,
     format_user_prompt,
 )
-from codewiki.src.be.cluster_modules import format_potential_core_components
 from codewiki.src.be.generation_progress import progress_of
-from codewiki.src.be.utils import count_tokens, is_complex_module
 from codewiki.src.be.doc_layout import config_layout, find_doc
 from codewiki.src.config import MODULE_TREE_FILENAME, OVERVIEW_FILENAME, Config
 
@@ -58,10 +59,11 @@ def _run_usage(result: Any) -> dict[str, Any] | None:
 
 
 class PydanticAIBackend(LLMBackend):
-    """API-key based backend using pydantic-ai + openai/litellm clients."""
+    """API-key based backend using pydantic-ai + openai/litellm/google-genai clients."""
 
     def __init__(self, config: Config) -> None:
         self._config = config
+        self._usage_ledger = UsageLedger()
         self._fallback_models = create_fallback_models(config)
         self._custom_instructions = config.get_prompt_addition()
         self.last_usage: dict[str, Any] | None = None
@@ -74,52 +76,21 @@ class PydanticAIBackend(LLMBackend):
         system_prompt: str | None = None,
         allow_tools: bool = True,  # API completions never use tools
     ) -> str:
-        pop_last_usage()
-        started = time.time()
-        result = call_llm(prompt, self._config, model=model, system_prompt=system_prompt)
-        self._record_usage(
-            "complete",
-            "",
-            pop_last_usage(),
-            seconds=time.time() - started,
-            model=model or self._config.main_model,
-        )
-        return result
-
-    async def run_overview_agent(
-        self,
-        prompt: str,
-        *,
-        system_prompt: str | None = None,
-        working_dir: str,
-        target: str,
-    ) -> str:
-        config = self._config
-        agent = Agent(
-            self._fallback_models,
-            name=f"overview:{target}",
-            deps_type=OverviewDeps,
-            tools=[read_module_documentation_tool],
-            system_prompt=append_pydantic_overview_tool_guidance(system_prompt),
-            retries=config.agent_retries,
-        )
-        deps = OverviewDeps(absolute_docs_path=working_dir)
-        started = time.time()
-        async with self.slots.hold_async():
-            result = await agent.run(
-                prompt,
-                deps=deps,
-                usage_limits=UsageLimits(request_limit=config.request_limit),
-            )
-        self._record_usage(
-            "overview_agent",
-            target,
-            _run_usage(result),
-            seconds=time.time() - started,
-            model=config.main_model,
-        )
-        text = result.output if isinstance(result.output, str) else str(result.output)
-        return text
+        started = time.monotonic()
+        with track_usage(self.usage_ledger, self._config, "complete") as tracked:
+            try:
+                return call_llm(prompt, self._config, model=model, system_prompt=system_prompt)
+            except Exception as exc:
+                if not tracked.entries:
+                    record_response(
+                        None, model or self._config.main_model, error=type(exc).__name__
+                    )
+                raise
+            finally:
+                if len(tracked.entries) == 1:
+                    tracked.entries[0]["seconds"] = round(time.monotonic() - started, 2)
+                self.last_usage = tracked.totals()
+                pop_last_usage()
 
     async def run_update_agent(
         self,
@@ -136,19 +107,19 @@ class PydanticAIBackend(LLMBackend):
             retries=self._config.agent_retries,
         )
         started = time.time()
-        result = await agent.run(
-            user_prompt,
-            deps=deps,
-            usage_limits=UsageLimits(request_limit=self._config.request_limit),
-        )
+        with track_usage(
+            self.usage_ledger, self._config, "update_agent", deps.current_module_name
+        ) as tracked:
+            try:
+                result = await agent.run(
+                    user_prompt,
+                    deps=deps,
+                    usage_limits=UsageLimits(request_limit=self._config.request_limit),
+                )
+            finally:
+                self.last_usage = tracked.totals()
         seconds = time.time() - started
-        usage = self._record_usage(
-            "update_agent",
-            deps.current_module_name,
-            _run_usage(result),
-            seconds=seconds,
-            model=self._config.main_model,
-        )
+        usage = self.last_usage
         text = result.output if isinstance(result.output, str) else str(result.output)
         return AgentReply(text=text, usage=usage, seconds=seconds)
 
@@ -171,27 +142,19 @@ class PydanticAIBackend(LLMBackend):
         # or a resume after a partial run silently skips every missing one.
         if not module_path:
             overview_docs_path = os.path.join(working_dir, OVERVIEW_FILENAME)
-            if os.path.exists(overview_docs_path):
+            if reusable_overview(overview_docs_path):
                 logger.info("✓ Overview docs already exists at %s", overview_docs_path)
                 return module_tree
         docs_path = find_doc(working_dir, module_name, module_tree) if module_path else None
         if docs_path is None:
             docs_path = os.path.join(working_dir, f"{module_name}.md")
-        if os.path.exists(docs_path):
+        if os.path.isfile(docs_path) and (module_path or reusable_overview(docs_path)):
             logger.info("✓ Module docs already exists at %s", docs_path)
             return module_tree
 
-        # Same gate as CawBackend and the sub-module tool: delegating to
-        # sub-agents only pays off for a multi-file module with enough code
-        # and recursion budget left. Without the token check every multi-file
-        # module fanned out, even ones a single leaf page covers.
-        _, components_with_code = format_potential_core_components(core_component_ids, components)
-        can_delegate = (
-            is_complex_module(components, core_component_ids)
-            and 1 < config.max_depth
-            and count_tokens(components_with_code) >= config.max_token_per_leaf_module
-        )
-        if can_delegate:
+        if not module_path:
+            core_component_ids = complete_file_candidates(core_component_ids, components)
+        if can_split_module(components, core_component_ids, config, 1):
             agent = Agent(
                 self._fallback_models,
                 name=module_name,
@@ -232,32 +195,38 @@ class PydanticAIBackend(LLMBackend):
             custom_instructions=self._custom_instructions,
             slots=self.slots,
             progress=progress_of(self),
+            scope_component_ids=core_component_ids,
         )
 
-        started = time.time()
+        user_prompt = format_user_prompt(
+            module_name=module_name,
+            core_component_ids=core_component_ids,
+            components=components,
+            module_tree=deps.module_tree,
+            module_path=module_path,
+            layout=config_layout(config),
+        )
+        if not module_path:
+            user_prompt = root_recovery_prompt(user_prompt, working_dir, module_name)
         try:
             async with self.slots.hold_async():
-                result = await agent.run(
-                    format_user_prompt(
-                        module_name=module_name,
-                        core_component_ids=core_component_ids,
-                        components=components,
-                        module_tree=deps.module_tree,
-                        module_path=module_path,
-                        layout=config_layout(config),
-                    ),
-                    deps=deps,
-                    usage_limits=UsageLimits(request_limit=config.request_limit),
-                )
-            # Covers this module's own run; pydantic-ai sub-module agents run
-            # with their own usage and are not counted here.
-            self._record_usage(
-                "module_agent",
-                module_name,
-                _run_usage(result),
-                seconds=time.time() - started,
-                model=config.main_model,
-            )
+                with track_usage(self.usage_ledger, config, "module_agent", module_name) as tracked:
+                    try:
+                        await run_until_doc_written(
+                            agent,
+                            user_prompt,
+                            deps=deps,
+                            module_name=module_name,
+                            module_path=module_path,
+                            layout=config_layout(config),
+                            usage_limits=UsageLimits(request_limit=config.request_limit),
+                        )
+                    finally:
+                        self.last_usage = tracked.totals()
+                        # Keep agent-inserted children resumable even if its own
+                        # required page is still missing after reminders.
+                        shared.save(module_tree_path, deps.module_tree)
+            validate_module_file_coverage(deps.module_tree, components)
             shared.save(module_tree_path, deps.module_tree)
             return deps.module_tree
         except Exception as e:

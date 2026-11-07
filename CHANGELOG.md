@@ -47,6 +47,21 @@ still `codewiki`.
 - **Installers** for Windows, Linux and macOS (`packaging/install/`). They
   check git and Node.js/npm, then install with uv, or with pip if uv isn't
   wanted.
+- **Backstage TechDocs output.** `codewiki generate --techdocs` (or
+  `codewiki techdocs DOCS_DIR OUT_DIR` on existing docs, with no LLM calls)
+  writes an MkDocs project that `techdocs-cli generate` builds as is:
+  `mkdocs.yml` with the `techdocs-core` plugin and the module tree as the nav,
+  plus `docs/` with the overview as `index.md`. Each page gets front matter, a
+  provenance banner (commit, date, model) and a collapsible list of the
+  components it documents, linked to the source at the documented commit.
+  JSON files and `temp/` are left out
+  ([#145](https://github.com/FSoft-AI4Code/CodeWiki/issues/145)).
+- **Google provider.** `google` (Gemini API key) and `google-vertex` (Vertex AI
+  with Google credentials: ADC or Workload Identity Federation, plus
+  `--google-project` and `--google-location`) run on Gemini without a base
+  URL. Agent loops use pydantic-ai's native `GoogleModel`, so Gemini 3 thought
+  signatures survive tool-call turns, and the cost summary prices Gemini runs
+  from genai-prices ([#20](https://github.com/FSoft-AI4Code/CodeWiki/issues/20)).
 - **Rust analyzer.** Structs, unions, enums, traits, free functions, and
   impl/trait methods become components, with trait-impl, field-type,
   struct-literal, and call edges. `#[cfg(test)]` modules are skipped, and
@@ -65,6 +80,46 @@ still `codewiki`.
   providers (including `@riverpod` codegen), and GoRouter routes link to their
   screens. Generated `*.g.dart`/`*.freezed.dart` files and `.dart_tool/` are
   ignored, and Dart modules get Flutter-specific documentation guidance.
+- **Go analyzer.** Functions, methods, structs, interfaces (and their method
+  signatures), and other defined types (`type Kind int`) become components.
+  Methods are keyed by their receiver type (`Buffer.Push`, pointer or value
+  receiver alike), whichever file of the package declares them. Edges cover
+  calls (plain, `pkg.F()`, and method calls on receivers, parameters and
+  locals whose type can be inferred), struct field and embedded types,
+  composite literals, types named in signatures and local `var`s, and types
+  that implement an interface of their own package. Names resolve inside the
+  package (directory) they name; imports of the repository's own packages map
+  to directories through the module path in `go.mod` (and local `replace`
+  directives), and standard-library or third-party calls are dropped.
+  `_test.go` files and `vendor/` are skipped.
+- **Zig analyzer.** Functions, containers (`struct`, `enum`, `union`,
+  `opaque`), their member functions (`Point.add`), and generic type functions
+  (`fn List(comptime T: type) type { return struct {...}; }`) become
+  components. Edges cover calls (plain, `alias.fn()`, and method calls on
+  `Self`, parameters, and locals whose type can be inferred), `T{...}`
+  literals, and types named in parameters, return types, fields, and
+  annotated locals. `@import("x.zig")` aliases and re-exports
+  (`const T = @import("x.zig").T;`) resolve to the file that declares the
+  name, as do module names that the root `build.zig` registers with
+  `addModule`; `std`, `builtin`, and third-party packages are dropped. `test`
+  blocks and `zig-cache/`, `.zig-cache/`, `zig-out/` are skipped, `build.zig`
+  is also a build artifact, and `build.zig.zon` is a manifest.
+- **Vue single-file components.** Each `.vue` file becomes a component
+  (`ArticleList.vue::ArticleList`), and its options-API members (`methods`,
+  `computed`, `watch`, lifecycle hooks such as `mounted` or `setup`) become
+  its methods. `<script>` and `<script setup>` blocks go through the
+  JavaScript or TypeScript analyzer (`lang="ts"`), keeping the `.vue` file's
+  line numbers. Edges link a component to the `.vue` files and modules it
+  imports (relative paths and the `@/` alias), to the components its template
+  uses (`<article-preview>` or `<ArticlePreview>`), and to the members and
+  script functions its template expressions call or bind.
+- **Autotools build files.** `configure.ac`, `Makefile.am` (and other `*.am`),
+  `acinclude.m4`, and macros under `m4/` are build artifacts. A `Makefile.am`
+  gets a unit per library or program it builds (`libfoo.la`), linked to the
+  sources in its `_SOURCES` lists, and `SUBDIRS` links to the sub-directory
+  `Makefile.am`s. A `configure.ac` gets a unit per `AC_ARG_ENABLE` /
+  `AC_ARG_WITH` option and links to the `Makefile.am`s that `AC_CONFIG_FILES`
+  generates.
 
 ### Changed
 

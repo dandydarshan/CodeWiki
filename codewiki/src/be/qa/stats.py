@@ -45,17 +45,9 @@ class AskStats:
         if not usage:
             return
         cache_read = int(usage.get("cache_read_tokens") or 0)
-        if "input_tokens" in usage:
-            # Anthropic-style (claude-code): input_tokens excludes cached prompt
-            # tokens, which are billed and reported separately.
-            self.input_tokens += (
-                int(usage.get("input_tokens") or 0)
-                + cache_read
-                + int(usage.get("cache_write_tokens") or 0)
-            )
-        else:
-            # OpenAI-style: prompt_tokens already includes cached tokens.
-            self.input_tokens += int(usage.get("prompt_tokens") or 0)
+        # Backends normalize usage to inclusive input (api_usage): input_tokens (or
+        # OpenAI's prompt_tokens) already counts cached prompt tokens, so never add them.
+        self.input_tokens += int(usage.get("input_tokens", usage.get("prompt_tokens")) or 0)
         self.output_tokens += int(usage.get("output_tokens") or usage.get("completion_tokens") or 0)
         self.cache_read_tokens += cache_read
         cost = usage.get("cost_usd")

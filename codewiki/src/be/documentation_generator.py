@@ -2,7 +2,7 @@ import asyncio
 import json
 import logging
 import os
-import re
+from pathlib import Path
 import traceback
 from copy import deepcopy
 from typing import Any
@@ -27,10 +27,24 @@ from codewiki.src.be.doc_layout import (
     organize_docs,
     relative_link,
 )
+from codewiki.src.be.utils import validate_mermaid_content
+from codewiki.src.be.overview_support import (
+    bounded_overview_prompt,
+    overview_content,
+    overview_error,
+    preserve_incomplete_overviews,
+    reusable_overview,
+    save_overview,
+)
 from codewiki.src.be.module_naming import (
     dedupe_module_tree_names,
     find_missing_module_docs,
     resolve_module_doc_path,
+)
+from codewiki.src.be.module_scope import (
+    complete_file_candidates,
+    get_module_token_count,
+    validate_module_file_coverage,
 )
 from codewiki.src.be.prompt_template import (
     MODULE_OVERVIEW_PROMPT,
@@ -68,15 +82,6 @@ def write_docs_gitattributes(docs_dir: str) -> None:
     if not os.path.exists(path):
         with open(path, "w", encoding="utf-8") as f:
             f.write(DOCS_GITATTRIBUTES)
-
-
-# Tool calls a model wrote as text instead of calling the tool: Kimi's special
-# tokens (or the `functions.<name>:<n>` line left once they are stripped) and
-# Hermes/Qwen-style tags. Publishing these would put raw tool calls in the wiki.
-_LEAKED_TOOL_CALL_RE = re.compile(
-    r"<\|tool_calls?_(?:section_)?begin\|>|<tool_call>|^\s*functions\.\w+:\d+",
-    re.MULTILINE,
-)
 
 
 class IncompleteDocumentationError(Exception):
@@ -192,10 +197,9 @@ class DocumentationGenerator:
         """Build structure for overview generation with 1-depth children doc paths and target indicator.
 
         Children docs are referenced by absolute file path (``docs_path``)
-        rather than inlined, and ``components`` lists are stripped: inlining
-        the full tree plus docs blew past provider input caps (codex rejects
-        turns over 1,048,576 chars) on large repos. The overview agent reads
-        the referenced files itself.
+        rather than inlined, and ``components`` lists are stripped. The
+        completion prompt separately includes bounded child excerpts so API
+        backends need no file-reading tools.
         """
 
         processed_module_tree = deepcopy(module_tree)
@@ -216,9 +220,9 @@ class DocumentationGenerator:
         for child_name, child_info in module_info.items():
             child_rel = module_doc_relpath(module_path + [child_name], layout)
             child_docs_path = self._resolve_child_docs_path(working_dir, child_name, module_tree)
+            child_info["link"] = relative_link(page_rel, child_rel)
             if child_docs_path is not None:
                 child_info["docs_path"] = child_docs_path
-                child_info["link"] = relative_link(page_rel, child_rel)
             else:
                 logger.warning(f"Module docs not found at {os.path.join(working_dir, child_rel)}")
                 child_info["docs_path"] = None
@@ -320,6 +324,8 @@ class DocumentationGenerator:
         module_tree: dict[str, Any],
     ) -> str:
         final_module_tree = module_tree
+        module_tree_path = os.path.join(working_dir, MODULE_TREE_FILENAME)
+        failures: list[str] = []
 
         # Status line after every page; agents' sub-modules add to the total
         # as they are planned (the backends reach the reporter through
@@ -336,7 +342,9 @@ class DocumentationGenerator:
         with progress.activate():
             if len(module_tree) > 0:
                 progress.add(self._count_modules(module_tree) + 1)  # + repository overview
-                await self._process_module_tree(module_tree, components, working_dir, progress)
+                await self._process_module_tree(
+                    module_tree, components, working_dir, progress, failures
+                )
 
                 # Generate repo overview
                 logger.info("📚 Generating repository overview")
@@ -347,30 +355,36 @@ class DocumentationGenerator:
             else:
                 logger.info("Processing whole repo because repo can fit in the context window")
                 repo_name = os.path.basename(os.path.normpath(self.config.repo_path))
+                repo_overview_path = os.path.join(working_dir, f"{repo_name}.md")
+                overview_path = os.path.join(working_dir, OVERVIEW_FILENAME)
                 progress.add(1)
-                with progress.track(repo_name):
+                with (
+                    progress.track(repo_name),
+                    preserve_incomplete_overviews([repo_overview_path, overview_path]),
+                ):
                     final_module_tree = await self.backend.run_module_agent(
                         module_name=repo_name,
                         components=components,
-                        core_component_ids=leaf_nodes,
+                        core_component_ids=complete_file_candidates(leaf_nodes, components),
                         module_path=[],
                         working_dir=working_dir,
                     )
-
-                # save final_module_tree to module_tree.json
-                file_manager.save_json(
-                    final_module_tree, os.path.join(working_dir, MODULE_TREE_FILENAME)
-                )
-
-                # rename repo_name.md to overview.md
-                repo_overview_path = os.path.join(working_dir, f"{repo_name}.md")
-                if os.path.exists(repo_overview_path):
-                    os.rename(repo_overview_path, os.path.join(working_dir, OVERVIEW_FILENAME))
+                    validate_module_file_coverage(final_module_tree, components)
+                    file_manager.save_json(final_module_tree, module_tree_path)
+                    if os.path.exists(repo_overview_path):
+                        os.replace(repo_overview_path, overview_path)
         for line in progress.summary():
             (emit or logger.info)(line)
 
+        # Also check resumed trees whose agents returned early because their
+        # pages already existed. Do not silently bless an old partial tree.
+        validate_module_file_coverage(file_manager.load_json(module_tree_path), components)
+
         # Move pages an agent saved in the wrong folder and fix links between pages
         organize_docs(working_dir, config_layout(self.config))
+
+        if failures:
+            raise RuntimeError("Documentation failed for modules: " + "; ".join(failures))
 
         return working_dir
 
@@ -391,6 +405,7 @@ class DocumentationGenerator:
         components: dict[str, Any],
         working_dir: str,
         progress: GenerationProgress = NULL_PROGRESS,
+        failures: list[str] | None = None,
     ) -> None:
         """Document every module, children before their parent.
 
@@ -426,10 +441,20 @@ class DocumentationGenerator:
                                 working_dir=working_dir,
                             )
             except Exception as e:  # noqa: BLE001 — one failed module must not abort the run
+                if failures is not None:
+                    failures.append(f"{module_key}: {e}")  # the run fails at the end, listing them
                 logger.error(f"Failed to process module {module_key}: {e!s}")
                 logger.error(f"Traceback: {traceback.format_exc()}")
 
         await asyncio.gather(*(process([name], info) for name, info in module_tree.items()))
+
+    async def _complete(self, prompt: str, system_prompt: str) -> str:
+        """Single-shot completion off the event loop, so concurrently running agents keep
+        going (a blocking call here would stall every agent while one overview is written)."""
+        complete_async = getattr(self.backend, "complete_async", None)
+        if complete_async is not None:
+            return await complete_async(prompt, system_prompt=system_prompt)
+        return await asyncio.to_thread(self.backend.complete, prompt, system_prompt=system_prompt)
 
     async def generate_parent_module_docs(
         self,
@@ -461,13 +486,13 @@ class DocumentationGenerator:
         existing_docs_path = (
             resolve_module_doc_path(working_dir, module_name, module_tree) if module_path else None
         )
-        if existing_docs_path is not None:
+        if existing_docs_path is not None and reusable_overview(existing_docs_path):
             logger.info(f"✓ Parent docs already exists at {existing_docs_path}")
             return module_tree
-        parent_docs_path = os.path.join(
+        parent_docs_path = existing_docs_path or os.path.join(
             working_dir, module_doc_relpath(module_path, config_layout(self.config))
         )
-        if os.path.exists(parent_docs_path):
+        if existing_docs_path is None and reusable_overview(parent_docs_path):
             logger.info(f"✓ Parent docs already exists at {parent_docs_path}")
             return module_tree
 
@@ -491,51 +516,48 @@ class DocumentationGenerator:
                 )
         logger.debug(f"Overview prompt for {module_name}: {len(prompt)} chars")
 
+        child_info = repo_structure
+        for part in module_path:
+            child_info = child_info[part]["children"]
+        children = {}
+        for name, info in child_info.items():
+            path = info.get("docs_path")
+            if path:
+                try:
+                    children[name] = Path(path).read_text(encoding="utf-8")
+                except (OSError, UnicodeError) as exc:
+                    logger.warning("Cannot read child documentation %s: %s", path, exc)
+        system_prompt = format_overview_system_prompt(self.config.get_prompt_addition())
+
         phase = "overview" if not module_path else "parent_modules"
         try:
-            # One retry: a model that wrote its tool call as text often calls it properly next time.
-            for attempt in (1, 2):
+            correction = previous = ""
+            for attempt in range(2):
+                request = bounded_overview_prompt(
+                    prompt, children, system_prompt, correction=correction, previous=previous
+                )
                 with self.usage_ledger.in_phase(phase, target=module_name):
-                    parent_docs = await self.backend.run_overview_agent(
-                        prompt,
-                        system_prompt=format_overview_system_prompt(
-                            self.config.get_prompt_addition()
-                        ),
-                        working_dir=working_dir,
-                        target=module_name,
+                    parent_docs = await self._complete(request, system_prompt=system_prompt)
+                parent_content = overview_content(parent_docs)
+                correction = overview_error(parent_content)
+                previous = parent_content
+                if correction is None:
+                    report = await validate_mermaid_content(parent_content, repair=True)
+                    if not report.errors:
+                        if report.unavailable:
+                            logger.warning(report.format(parent_docs_path))
+                        elif report.repairs:
+                            logger.info(report.format(parent_docs_path))
+                        save_overview(report.content, parent_docs_path)
+                        break
+                    correction = report.format(parent_docs_path)
+                    previous = report.content
+                if attempt == 1:
+                    raise RuntimeError(
+                        f"Invalid documentation for {module_name} at {parent_docs_path} "
+                        f"after one correction attempt: {correction}"
                     )
-                if not (parent_docs and _LEAKED_TOOL_CALL_RE.search(parent_docs)):
-                    break
-                logger.warning(
-                    f"Overview for {module_name} contains tool-call text instead of a "
-                    f"tool call (attempt {attempt}/2)"
-                )
-            else:
-                raise RuntimeError(
-                    f"Overview for {module_name} still contains raw tool-call text after a "
-                    f"retry; the model is not calling tools properly (check the provider's "
-                    f"tool-call parser)"
-                )
-            if not parent_docs:
-                raise RuntimeError(
-                    f"LLM returned empty content for {module_name} overview "
-                    f"(possible output truncation at max_tokens)"
-                )
-
-            # Parse and save parent documentation. Subscription-CLI backends
-            # (claude-code / codex) sometimes ignore the <OVERVIEW> wrapper and
-            # return raw markdown; fall back to the response as-is in that case
-            # rather than crashing with an index error.
-            if "<OVERVIEW>" in parent_docs and "</OVERVIEW>" in parent_docs:
-                parent_content = parent_docs.split("<OVERVIEW>")[1].split("</OVERVIEW>")[0].strip()
-            else:
-                logger.warning(
-                    f"Overview response for {module_name} missing <OVERVIEW> wrapper; "
-                    f"using raw response as markdown."
-                )
-                parent_content = parent_docs.strip()
-            os.makedirs(os.path.dirname(parent_docs_path), exist_ok=True)
-            file_manager.save_text(parent_content, parent_docs_path)
+                logger.warning("Retrying documentation for %s: %s", module_name, correction)
 
             logger.debug(f"Successfully generated parent documentation for: {module_name}")
             return module_tree
@@ -582,11 +604,13 @@ class DocumentationGenerator:
                     file_manager.save_json(module_tree, module_tree_path)
             else:
                 logger.debug(f"Module tree not found at {module_tree_path}, clustering modules")
-                clustering_tokens = get_clustering_input_token_count(leaf_nodes, components)
+                clustering_tokens = get_module_token_count(components)
                 logger.info(
-                    "Preparing %d leaf nodes for module clustering (%d tokens, threshold %d)",
+                    "Preparing %d leaf nodes for module clustering "
+                    "(code_tokens=%d, leaf_tokens=%d, threshold=%d)",
                     len(leaf_nodes),
                     clustering_tokens,
+                    get_clustering_input_token_count(leaf_nodes, components),
                     self.config.max_token_per_module,
                 )
                 # Bind cluster_model into the completer so the backend uses the
@@ -610,10 +634,16 @@ class DocumentationGenerator:
                 # Artifact nodes the clustering LLM dropped get a fixed module
                 # so build/CI/config coverage does not depend on the LLM.
                 if getattr(self.config, "artifacts_enabled", True):
-                    module_tree = ensure_artifact_module(module_tree, leaf_nodes, components)
+                    module_tree = ensure_artifact_module(
+                        module_tree,
+                        leaf_nodes,
+                        components,
+                        min_tokens=self.config.min_token_per_module,
+                    )
                 # Only freshly clustered trees are deduped: renaming a cached
                 # key whose .md already exists would orphan the doc.
                 module_tree = dedupe_module_tree_names(module_tree)
+                validate_module_file_coverage(module_tree, components)
                 file_manager.save_json(module_tree, first_module_tree_path)
                 file_manager.save_json(module_tree, module_tree_path)
 
@@ -653,4 +683,15 @@ class DocumentationGenerator:
         except Exception as e:
             logger.error(f"Documentation generation failed: {e!s}")
             logger.error(f"Traceback: {traceback.format_exc()}")
+            self.usage_ledger.incomplete = True
+            try:
+                path = os.path.join(self.config.docs_dir, "metadata.json")
+                metadata = file_manager.load_json(path) if os.path.exists(path) else {}
+                if not isinstance(metadata, dict):
+                    metadata = {}
+                metadata["usage"] = self.usage_ledger.summary()
+                file_manager.ensure_directory(self.config.docs_dir)
+                file_manager.save_json(metadata, path)
+            except Exception:
+                logger.warning("Could not save the incomplete run usage report")
             raise

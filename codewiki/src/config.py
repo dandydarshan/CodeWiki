@@ -1,6 +1,6 @@
 import argparse
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from dotenv import load_dotenv
@@ -32,8 +32,9 @@ DEFAULT_LAYOUT = LAYOUT_HIERARCHICAL
 MAX_DEPTH = 2
 # Default max token settings
 DEFAULT_MAX_TOKENS = 32_768
+DEFAULT_MIN_TOKEN_PER_MODULE = 1_000
 DEFAULT_MAX_TOKEN_PER_MODULE = 36_369
-DEFAULT_MAX_TOKEN_PER_LEAF_MODULE = 4_000
+DEFAULT_MAX_TOKEN_PER_LEAF_MODULE = 8_000
 # pydantic-ai caps each agent run at 50 model requests by default; complex
 # modules that read many components and delegate sub-modules can need more.
 DEFAULT_REQUEST_LIMIT = 100
@@ -89,6 +90,11 @@ LLM_API_KEY = os.getenv("LLM_API_KEY", "sk-1234")
 ATLAS_CLOUD_BASE_URL = "https://api.atlascloud.ai/v1"
 
 
+def validate_min_module_tokens(value: int) -> None:
+    if type(value) is not int or value < 1:
+        raise ValueError("min_token_per_module must be a positive integer")
+
+
 @dataclass
 class Config:
     """Configuration class for CodeWiki."""
@@ -106,13 +112,19 @@ class Config:
     fallback_model: str = FALLBACK_MODEL_1
     # Provider configuration
     provider: str = (
-        "openai-compatible"  # openai-compatible, atlas-cloud, anthropic, bedrock, azure-openai
+        "openai-compatible"  # openai-compatible, atlas-cloud, anthropic, bedrock, azure-openai,
+        # google, google-vertex
     )
     aws_region: str = "us-east-1"
     api_version: str = "2024-12-01-preview"  # Azure OpenAI API version
     azure_deployment: str = ""  # Azure OpenAI deployment name
+    # Vertex AI (google-vertex): project falls back to GOOGLE_CLOUD_PROJECT, location to
+    # GOOGLE_CLOUD_LOCATION, then "global"
+    google_project: str = ""
+    google_location: str = ""
     # Max token settings
     max_tokens: int = DEFAULT_MAX_TOKENS
+    min_token_per_module: int = DEFAULT_MIN_TOKEN_PER_MODULE
     max_token_per_module: int = DEFAULT_MAX_TOKEN_PER_MODULE
     max_token_per_leaf_module: int = DEFAULT_MAX_TOKEN_PER_LEAF_MODULE
     min_modules_for_super_grouping: int = DEFAULT_MIN_MODULES_FOR_SUPER_GROUPING
@@ -125,6 +137,7 @@ class Config:
     # Prompt caching for agentic/multi-turn calls (auto-disables per model if
     # the provider rejects cache_control markers)
     prompt_caching: bool = True
+    pricing: dict = field(default_factory=dict)
     # Agent instructions for customization
     agent_instructions: dict[str, Any] | None = None
     # Apply Git ignore rules before dependency analysis
@@ -140,6 +153,9 @@ class Config:
     layout: str = DEFAULT_LAYOUT
     # Post-generation pass that repairs and adds wiki cross-links between pages
     crosslinks_enabled: bool = True
+
+    def __post_init__(self):
+        validate_min_module_tokens(self.min_token_per_module)
 
     @property
     def artifact_exclude(self) -> list[str] | None:
@@ -240,6 +256,9 @@ class Config:
             main_model=MAIN_MODEL,
             cluster_model=CLUSTER_MODEL,
             fallback_model=FALLBACK_MODEL_1,
+            min_token_per_module=getattr(
+                args, "min_token_per_module", DEFAULT_MIN_TOKEN_PER_MODULE
+            ),
             use_gitignore=getattr(args, "use_gitignore", True),
             layout=getattr(args, "layout", DEFAULT_LAYOUT),
         )
@@ -258,6 +277,8 @@ class Config:
         aws_region: str = "us-east-1",
         api_version: str = "2024-12-01-preview",
         azure_deployment: str = "",
+        google_project: str = "",
+        google_location: str = "",
         max_tokens: int = DEFAULT_MAX_TOKENS,
         max_token_per_module: int = DEFAULT_MAX_TOKEN_PER_MODULE,
         max_token_per_leaf_module: int = DEFAULT_MAX_TOKEN_PER_LEAF_MODULE,
@@ -276,6 +297,8 @@ class Config:
         with_prose: bool = False,
         layout: str = DEFAULT_LAYOUT,
         crosslinks_enabled: bool = True,
+        pricing: dict | None = None,
+        min_token_per_module: int = DEFAULT_MIN_TOKEN_PER_MODULE,
     ) -> "Config":
         """
         Create configuration for CLI context.
@@ -288,11 +311,15 @@ class Config:
             main_model: Primary model
             cluster_model: Clustering model
             fallback_model: Fallback model
-            provider: LLM provider type (openai-compatible, atlas-cloud, anthropic, bedrock, azure-openai)
+            provider: LLM provider type (openai-compatible, atlas-cloud, anthropic, bedrock,
+                azure-openai, google, google-vertex)
             aws_region: AWS region for Bedrock provider
             api_version: Azure OpenAI API version
             azure_deployment: Azure OpenAI deployment name
+            google_project: Google Cloud project for the google-vertex provider
+            google_location: Vertex AI location for the google-vertex provider
             max_tokens: Maximum tokens for LLM response
+            min_token_per_module: Minimum code tokens for a standalone module
             max_token_per_module: Maximum tokens per module for clustering
             max_token_per_leaf_module: Maximum tokens per leaf module
             min_modules_for_super_grouping: Super-group the top level into
@@ -320,6 +347,9 @@ class Config:
             Config instance
         """
         base_output_dir = os.path.join(output_dir, "temp")
+        from codewiki.src.be.pricing import validate_pricing
+
+        validate_pricing(pricing or {})
 
         return cls(
             repo_path=repo_path,
@@ -336,7 +366,10 @@ class Config:
             aws_region=aws_region,
             api_version=api_version,
             azure_deployment=azure_deployment,
+            google_project=google_project,
+            google_location=google_location,
             max_tokens=max_tokens,
+            min_token_per_module=min_token_per_module,
             max_token_per_module=max_token_per_module,
             max_token_per_leaf_module=max_token_per_leaf_module,
             min_modules_for_super_grouping=min_modules_for_super_grouping,
@@ -353,4 +386,5 @@ class Config:
             with_prose=with_prose,
             layout=layout,
             crosslinks_enabled=crosslinks_enabled,
+            pricing=pricing or {},
         )

@@ -169,6 +169,9 @@ def detect_supported_languages(directory: Path) -> list[tuple[str, int]]:
         "Scala": [".scala", ".sc"],
         "Rust": [".rs"],
         "Dart": [".dart"],
+        "Go": [".go"],
+        "Zig": [".zig"],
+        "Vue": [".vue"],
     }
 
     # Directories to exclude from counting
@@ -241,6 +244,7 @@ def is_top_tier_model(model: str) -> bool:
         "gpt-4",
         "gpt-5",
         "gemini-2.5",
+        "gemini-3",
     ]
 
     model_lower = model.lower()

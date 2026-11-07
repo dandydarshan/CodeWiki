@@ -9,6 +9,7 @@ Commands:
 | --- | --- |
 | `codewiki generate` | Build or update the documentation for the current directory |
 | `codewiki config set` | Store provider, model, and token settings |
+| `codewiki config pricing set/show/remove` | Manage API model rates in USD per million tokens |
 | `codewiki config agent` | Store default include/exclude/focus/doc-type/instructions |
 | `codewiki config show` | Print the stored settings (`--json` for machine-readable output) |
 | `codewiki config validate` | Check the settings and test the provider connection (`--skip-api-test`, `--verbose`) |
@@ -30,6 +31,8 @@ the repository first.
 | `--create-branch` | off | Create a git branch for the documentation changes |
 | `-y`, `--yes` | off | Don't ask for confirmation. Without it, `generate` asks before documenting a branch other than the default one or a tree with untracked files, and before overwriting existing docs; it never asks without a terminal (CI) |
 | `--github-pages` | off | Also write `index.html`, a static viewer for GitHub Pages |
+| `--techdocs` | off | Also export a Backstage TechDocs project (`mkdocs.yml` + `docs/`) after generation. See [`codewiki techdocs`](#codewiki-techdocs) |
+| `--techdocs-dir PATH` | `techdocs` | Where `--techdocs` writes. Must be outside `--output` |
 | `--no-cache` | off | Ignore cached results and rebuild everything |
 | `--verbose`, `-v` | off | Show progress details and debug output |
 | `--prompt-caching` / `--no-prompt-caching` | enabled | Add prompt-cache breakpoints to agent calls. Falls back to normal calls if the provider rejects them |
@@ -158,15 +161,29 @@ Override the stored limits for one run.
 | Flag | Stored default | Meaning |
 | --- | --- | --- |
 | `--max-tokens N` | `32768` | Maximum output tokens per LLM response |
+| `--min-token-per-module N` | `1000` | Minimum code tokens per standalone module; smaller groups merge into nearby siblings |
 | `--max-token-per-module N` | `36369` | Input-token threshold that triggers module clustering |
-| `--max-token-per-leaf-module N` | `16000` | Input-token threshold for leaf modules |
+| `--max-token-per-leaf-module N` | `8000` | Base code-token threshold to allow an agent to delegate |
 | `--max-depth N` | `2` | Maximum depth of the hierarchical decomposition |
+
+Module sizes include all indexed components in the files a module owns, using
+the GPT-4 tokenizer. Both agent backends apply the minimum to new child pages
+and reject a partition that collapses to one child. Delegation requires at
+least `max(2 * min_token_per_module, max_token_per_leaf_module * depth)` code
+tokens, multiple files, and a depth below `max_depth`. Delegation depth starts
+at 1, so the default token gates are 8,000, 16,000, 24,000, and so on; reaching
+the gate allows delegation without requiring it. A small repository stays
+on one overview page. Whole files remain indivisible, so an oversized file
+can exceed the upper threshold, including nearby small files merged into it.
+Cached module trees are retained; generate into a fresh output directory to
+apply these rules throughout an existing tree.
 
 ### Examples
 
 ```bash
 codewiki generate                                   # plain build into ./docs
 codewiki generate --github-pages --create-branch    # with viewer, on a new branch
+codewiki generate --techdocs                        # also export ./techdocs for Backstage
 codewiki generate --update                          # refresh after code changes
 codewiki generate --compare-to abc1234              # refresh relative to a known commit
 codewiki generate --no-artifacts                    # code only, 1.x behaviour
@@ -180,6 +197,27 @@ codewiki generate --max-tokens 16384 --max-depth 3
 
 ---
 
+## `codewiki techdocs`
+
+```bash
+codewiki techdocs [DOCS_DIR] [OUT_DIR]   # defaults: docs techdocs
+```
+
+Exports existing CodeWiki docs as a Backstage TechDocs (MkDocs) project. No
+LLM is called, so run it again after `codewiki generate --update`. The source
+docs are never modified, and the export only ever replaces an `OUT_DIR/docs`
+folder that an earlier export created.
+
+| Flag | Default | Meaning |
+| --- | --- | --- |
+| `--site-name TEXT` | repository folder name | `site_name` in `mkdocs.yml` |
+| `--repo-url URL` | the git `origin` remote | Repository link, and the base for source and commit links |
+| `--source-url-template TEXT` | detected for GitHub, GitLab, bitbucket.org | Source link format with `{repo}`, `{ref}` and `{path}`, e.g. `https://bb.example.com/projects/P/repos/R/browse/{path}?at={ref}` |
+
+See [Backstage TechDocs](backstage-techdocs.md).
+
+---
+
 ## `codewiki config set`
 
 Stores provider and model settings in `~/.codewiki/config.json`. Only the
@@ -187,7 +225,7 @@ keys you pass are changed. Provider examples are in [Providers](providers.md).
 
 | Flag | Meaning |
 | --- | --- |
-| `--provider NAME` | One of `openai-compatible` (default), `atlas-cloud`, `anthropic`, `bedrock`, `azure-openai`, `claude-code`, `codex` |
+| `--provider NAME` | One of `openai-compatible` (default), `atlas-cloud`, `anthropic`, `bedrock`, `azure-openai`, `claude-code`, `codex`, `google`, `google-vertex` |
 | `--api-key KEY` | API key. Stored in the system keychain when one is available |
 | `--base-url URL` | Provider endpoint. Set automatically for `atlas-cloud` |
 | `--main-model NAME` | Model for module documentation |
@@ -196,7 +234,9 @@ keys you pass are changed. Provider examples are in [Providers](providers.md).
 | `--aws-region REGION` | Bedrock only |
 | `--api-version VERSION` | Azure OpenAI only |
 | `--azure-deployment NAME` | Azure OpenAI only |
-| `--max-tokens N`, `--max-token-per-module N`, `--max-token-per-leaf-module N`, `--max-depth N` | Stored token limits, see the table above |
+| `--google-project ID` | `google-vertex` only. Defaults to `GOOGLE_CLOUD_PROJECT` |
+| `--google-location LOC` | `google-vertex` only, e.g. `global`, `eu`, `us`. Defaults to `GOOGLE_CLOUD_LOCATION`, then `global` |
+| `--max-tokens N`, `--min-token-per-module N`, `--max-token-per-module N`, `--max-token-per-leaf-module N`, `--max-depth N` | Stored token limits, see the table above |
 | `--use-gitignore` / `--no-gitignore` | Stored default for Git ignore handling |
 | `--prompt-caching` / `--no-prompt-caching` | Stored default for prompt caching |
 
@@ -207,6 +247,22 @@ Where things are stored:
   headless or container environments. Set `CODEWIKI_NO_KEYRING=1` to force the
   file.
 - **Settings and agent defaults**: `~/.codewiki/config.json`.
+
+## `codewiki config pricing`
+
+```bash
+codewiki config pricing set MODEL --input RATE --output RATE \
+  [--cache-read RATE] [--cache-write RATE] [--provider PROVIDER]
+codewiki config pricing show [--json]
+codewiki config pricing remove MODEL [--provider PROVIDER]
+```
+
+Prices are stored alongside provider settings and appear in `config show`.
+Input and output rates are required, finite, nonnegative USD amounts per million
+tokens; omitted cache rates use the input rate. The provider defaults to your
+active API provider. Claude Code and Codex keep their existing provider costs.
+Missing API prices produce unknown or partial reports without stopping the run.
+See [Cost tracking](providers.md#cost-tracking) for report details.
 
 ## `codewiki config agent`
 

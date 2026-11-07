@@ -50,6 +50,11 @@ tests/*
 !tests/test_scala_analyzer.py
 !tests/test_agent_limits.py
 !tests/test_compiled_wheel.py
+!tests/test_module_scope.py
+!tests/test_min_module_size.py
+!tests/test_doc_write_guard.py
+!tests/test_overview_generation.py
+!tests/test_techdocs.py
 
 # Jupyter
 *.ipynb
@@ -95,7 +100,6 @@ Thumbs.db
 !tests/test_usage_ledger.py
 !tests/test_chat_browser.py
 !tests/test_viewer_browser.py
-!tests/test_overview_agent.py
 !tests/test_cli_startup.py
 !tests/test_generate_branch_context.py
 
@@ -110,3 +114,12 @@ wheelhouse/
 
 # Release check (packaging/release_check)
 release-check-*/
+!tests/test_pricing.py
+!tests/smoke_test_costs.py
+
+# Mermaid regression tests and development-only parser harness
+!tests/test_mermaid_validation.py
+!tests/test_mermaid_writers.py
+!tests/mermaid/
+!tests/mermaid/**
+tests/mermaid/node_modules/

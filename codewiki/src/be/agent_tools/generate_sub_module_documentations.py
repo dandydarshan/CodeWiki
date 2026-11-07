@@ -6,6 +6,7 @@ from pydantic_ai import RunContext, Tool, Agent
 from pydantic_ai.usage import UsageLimits
 
 from codewiki.src.be.agent_tools.deps import CodeWikiDeps
+from codewiki.src.be.agent_tools.doc_guard import run_until_doc_written
 from codewiki.src.be.doc_layout import config_layout, module_doc_file
 from codewiki.src.be.generation_progress import progress_of
 from codewiki.src.be.module_naming import skipped_report, plan_sub_module_specs, sub_module_report
@@ -17,11 +18,15 @@ from codewiki.src.be.prompt_template import (
     format_system_prompt,
     format_user_prompt,
 )
-from codewiki.src.be.utils import is_complex_module, count_tokens
-from codewiki.src.be.cluster_modules import format_potential_core_components
 from codewiki.src.be.dependency_analyzer.utils.paths import normalize_component_ids
+from codewiki.src.config import DEFAULT_MIN_TOKEN_PER_MODULE
+from codewiki.src.be.module_scope import (
+    can_split_module,
+    prepare_sized_submodule_partition,
+)
 
 import logging
+from codewiki.src.be.api_usage import usage_target
 
 logger = logging.getLogger(__name__)
 
@@ -46,17 +51,33 @@ async def generate_sub_module_documentation(
             Sub-module names must be unique across the whole wiki. A name already used by another module is
             prefixed with the current module name; a name that is already documented (plain or prefixed)
             is SKIPPED, not regenerated. The tool result reports the final file names actually saved and
-            every skipped request.
+            every skipped request. Children below the configured minimum code-token size are
+            merged into a nearby sibling. Partitions with fewer than two viable children are
+            rejected; document the module directly instead.
     """
-
     deps = ctx.deps
     previous_module_name = deps.current_module_name
     sub_module_specs = {
         name: normalize_component_ids(ids) for name, ids in sub_module_specs.items()
     }
-
-    # Create fallback models from config
-    fallback_models = create_fallback_models(deps.config)
+    layout = config_layout(deps.config)
+    parent_path = list(deps.path_to_current_module)
+    parent_doc = module_doc_file(previous_module_name, parent_path, layout)
+    if not can_split_module(
+        deps.components,
+        deps.module_component_ids(),
+        deps.config,
+        deps.current_depth,
+        max_depth=deps.max_depth,
+    ):
+        return skipped_report(
+            {
+                name: "module cannot delegate: file count, token threshold or depth limit; "
+                "write this module directly"
+                for name in sub_module_specs
+            },
+            parent_doc,
+        )
 
     # Resolve name collisions against the module tree and files already on disk
     # before touching the tree (issue #76): names are unique across the wiki.
@@ -69,9 +90,6 @@ async def generate_sub_module_documentation(
         deps.absolute_docs_path,
     )
     name_map = plan.name_map
-    layout = config_layout(deps.config)
-    parent_path = list(deps.path_to_current_module)
-    parent_doc = module_doc_file(previous_module_name, parent_path, layout)
     if not name_map:
         return skipped_report(plan.skipped, parent_doc)
     final_specs = {
@@ -80,10 +98,26 @@ async def generate_sub_module_documentation(
         if requested_name in name_map
     }
 
-    # add the sub-module to the module tree
     value = deps.module_tree
-    for key in deps.path_to_current_module:
+    for key in parent_path:
         value = value[key]["children"]
+    final_specs, rejected = prepare_sized_submodule_partition(
+        final_specs,
+        deps.module_component_ids(),
+        deps.components,
+        value,
+        getattr(deps.config, "min_token_per_module", DEFAULT_MIN_TOKEN_PER_MODULE),
+        deps.config.max_token_per_module,
+    )
+    for requested, final_name in list(name_map.items()):
+        if final_name not in final_specs:
+            plan.skipped[requested] = rejected[final_name]
+            del name_map[requested]
+    if not final_specs:
+        return skipped_report(plan.skipped, parent_doc)
+
+    fallback_models = create_fallback_models(deps.config)
+    # Reserve every child's complete file scope before running any agent.
     for sub_module_name, core_component_ids in final_specs.items():
         value[sub_module_name] = {"components": core_component_ids, "children": {}}
 
@@ -94,15 +128,13 @@ async def generate_sub_module_documentation(
 
     async def run_one(sub_module_name: str, core_component_ids: list[str]) -> None:
         logger.info(f"{indent}{arrow} Generating documentation for sub-module: {sub_module_name}")
-
-        num_tokens = count_tokens(
-            format_potential_core_components(core_component_ids, deps.components)[-1]
-        )
-
-        if (
-            is_complex_module(deps.components, core_component_ids)
-            and deps.current_depth < deps.max_depth
-            and num_tokens >= deps.config.max_token_per_leaf_module * deps.current_depth
+        child_depth = deps.current_depth + 1
+        if can_split_module(
+            deps.components,
+            core_component_ids,
+            deps.config,
+            child_depth,
+            max_depth=deps.max_depth,
         ):
             sub_agent = Agent(
                 model=fallback_models,
@@ -143,24 +175,30 @@ async def generate_sub_module_documentation(
             registry={},
             path_to_current_module=parent_path + [sub_module_name],
             current_module_name=sub_module_name,
-            current_depth=deps.current_depth + 1,
+            current_depth=child_depth,
+            scope_component_ids=core_component_ids,
         )
         # Track outside the slot so the status line, printed on exit, does
         # not count this finished agent as still running.
         with progress.track("/".join(sub_deps.path_to_current_module)):
             async with slots_hold(deps.slots):
-                await sub_agent.run(
-                    format_user_prompt(
+                with usage_target(sub_module_name):
+                    await run_until_doc_written(
+                        sub_agent,
+                        format_user_prompt(
+                            module_name=sub_module_name,
+                            core_component_ids=core_component_ids,
+                            components=deps.components,
+                            module_tree=deps.module_tree,
+                            module_path=list(sub_deps.path_to_current_module),
+                            layout=layout,
+                        ),
+                        deps=sub_deps,
                         module_name=sub_module_name,
-                        core_component_ids=core_component_ids,
-                        components=deps.components,
-                        module_tree=deps.module_tree,
                         module_path=list(sub_deps.path_to_current_module),
                         layout=layout,
-                    ),
-                    deps=sub_deps,
-                    usage_limits=UsageLimits(request_limit=deps.config.request_limit),
-                )
+                        usage_limits=UsageLimits(request_limit=deps.config.request_limit),
+                    )
 
     # This agent is idle until its sub-agents finish, so it lends its slot.
     async with slots_lend(deps.slots):

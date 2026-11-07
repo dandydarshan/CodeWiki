@@ -11,6 +11,7 @@ import codewiki.src.be.agent_tools.generate_sub_module_documentations as sub_mod
 import codewiki.src.be.llm_services as llm_services
 from codewiki.cli.models.config import Configuration
 from codewiki.src.be.agent_tools.deps import CodeWikiDeps
+from codewiki.src.be.dependency_analyzer.models.core import Node
 from codewiki.src.be.prompt_template import format_overview_system_prompt
 from codewiki.src.config import DEFAULT_AGENT_RETRIES, DEFAULT_REQUEST_LIMIT, Config
 
@@ -47,13 +48,21 @@ def test_backend_config_defaults():
 
 
 def test_fallback_covers_malformed_responses(monkeypatch):
+    from pydantic_ai.models.function import FunctionModel
+
     captured = {}
-    monkeypatch.setattr(llm_services, "create_main_model", lambda config: "main")
-    monkeypatch.setattr(llm_services, "create_fallback_model", lambda config: "fallback")
+    monkeypatch.setattr(
+        llm_services, "create_main_model", lambda config: FunctionModel(lambda m, i: None)
+    )
+    monkeypatch.setattr(
+        llm_services, "create_fallback_model", lambda config: FunctionModel(lambda m, i: None)
+    )
     monkeypatch.setattr(
         llm_services, "FallbackModel", lambda *models, **kwargs: captured.update(kwargs)
     )
-    llm_services.create_fallback_models(SimpleNamespace())
+    llm_services.create_fallback_models(
+        SimpleNamespace(main_model="main", fallback_model="fallback")
+    )
     # a 200 response with an unparseable body must also switch to the fallback model
     assert set(captured["fallback_on"]) == {llm_services.ModelAPIError, UnexpectedModelBehavior}
 
@@ -87,22 +96,41 @@ def test_sub_module_agents_get_limits_and_no_literal_none(tmp_path, monkeypatch)
 
     monkeypatch.setattr(sub_mod, "Agent", FakeAgent)
     monkeypatch.setattr(sub_mod, "create_fallback_models", lambda config: None)
+    source = tmp_path / "b.py"
+    source.write_text("def fb(): pass\n")
+    component = Node(
+        id="b.py::fb",
+        name="fb",
+        component_type="function",
+        file_path=str(source),
+        relative_path="b.py",
+        source_code=source.read_text(),
+    )
+    other = component.model_copy(
+        update={"id": "c.py::fc", "file_path": "c.py", "relative_path": "c.py"}
+    )
     deps = CodeWikiDeps(
         absolute_docs_path=str(tmp_path),
         absolute_repo_path=str(tmp_path),
         registry={},
-        components={},
+        components={component.id: component, other.id: other},
         path_to_current_module=[],
         current_module_name="root",
         module_tree={},
         max_depth=2,
         current_depth=1,
-        config=SimpleNamespace(max_token_per_leaf_module=4000, agent_retries=7, request_limit=321),
+        config=SimpleNamespace(
+            min_token_per_module=1,
+            max_token_per_module=36369,
+            max_token_per_leaf_module=1,
+            agent_retries=7,
+            request_limit=321,
+        ),
         custom_instructions=None,
     )
     asyncio.run(
         sub_mod.generate_sub_module_documentation(
-            SimpleNamespace(deps=deps), {"billing": ["b.py::fb"]}
+            SimpleNamespace(deps=deps), {"billing": ["b.py::fb"], "other": [other.id]}
         )
     )
     assert seen["init"]["retries"] == 7

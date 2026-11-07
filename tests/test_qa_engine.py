@@ -15,7 +15,8 @@ from codewiki.src.be.qa.stats import AskStats
 from qa_fixture import build
 
 UNSIGN = "pkg/timed.py::TimestampSigner.unsign"
-USAGE = {"input_tokens": 100, "output_tokens": 20, "cache_read_tokens": 5, "cost_usd": 0.001}
+# Normalized like the backends report it: input_tokens includes the 5 cached tokens.
+USAGE = {"input_tokens": 105, "output_tokens": 20, "cache_read_tokens": 5, "cost_usd": 0.001}
 
 
 class ScriptedBackend:
@@ -362,10 +363,11 @@ def test_cli_ask_prints_answer_sources_and_stats(docs, monkeypatch):
 
 
 def test_anthropic_style_usage_counts_cached_prompt_tokens():
+    # As the backends normalize it (api_usage): input_tokens already includes the cache.
     s = AskStats()
     s.add_usage(
         {
-            "input_tokens": 4,
+            "input_tokens": 4804,
             "output_tokens": 1600,
             "cache_read_tokens": 4500,
             "cache_write_tokens": 300,

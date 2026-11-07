@@ -4,7 +4,8 @@ LLM service factory for creating configured LLM clients.
 Includes a compatibility layer for OpenAI-compatible API proxies that may
 return slightly non-standard responses (e.g. choices[].index = None).
 
-Supports multiple providers: openai-compatible, anthropic, bedrock, azure-openai.
+Supports multiple providers: openai-compatible, anthropic, bedrock, azure-openai,
+google (Gemini API) and google-vertex (Vertex AI).
 """
 
 import inspect
@@ -21,6 +22,7 @@ try:  # pydantic-ai >= 1.x adds ModelAPIError as the parent of ModelHTTPError
     from pydantic_ai.exceptions import ModelAPIError
 except ImportError:  # older releases (e.g. the pinned 1.0.6) only have ModelHTTPError
     ModelAPIError = ModelHTTPError
+from pydantic_ai.models import Model
 from pydantic_ai.models.openai import OpenAIChatModel, OpenAIChatModelSettings
 from pydantic_ai.models.fallback import FallbackModel
 from pydantic_ai.providers.openai import OpenAIProvider
@@ -28,6 +30,7 @@ from openai import DefaultHttpxClient, OpenAI, BadRequestError
 
 from codewiki.src.be import context_budget
 from codewiki.src.be.generation_progress import notify_http_response
+from codewiki.src.be.backend import is_google_provider
 from codewiki.src.config import Config
 
 logger = logging.getLogger(__name__)
@@ -333,8 +336,12 @@ def _create_litellm_openai_client(config: Config) -> OpenAI:
     )
 
 
-def create_main_model(config: Config) -> CachingOpenAIModel:
+def create_main_model(config: Config) -> Model:
     """Create the main LLM model from configuration."""
+    if is_google_provider(getattr(config, "provider", "")):
+        from codewiki.src.be.google_provider import create_google_model
+
+        return create_google_model(config, config.main_model)
     return CachingOpenAIModel(
         model_name=config.main_model,
         prompt_caching=config.prompt_caching,
@@ -345,8 +352,12 @@ def create_main_model(config: Config) -> CachingOpenAIModel:
     )
 
 
-def create_fallback_model(config: Config) -> CachingOpenAIModel:
+def create_fallback_model(config: Config) -> Model:
     """Create the fallback LLM model from configuration."""
+    if is_google_provider(getattr(config, "provider", "")):
+        from codewiki.src.be.google_provider import create_google_model
+
+        return create_google_model(config, config.fallback_model)
     return CachingOpenAIModel(
         model_name=config.fallback_model,
         prompt_caching=config.prompt_caching,
@@ -359,8 +370,10 @@ def create_fallback_model(config: Config) -> CachingOpenAIModel:
 
 def create_fallback_models(config: Config) -> FallbackModel:
     """Create fallback models chain from configuration."""
-    main = create_main_model(config)
-    fallback = create_fallback_model(config)
+    from codewiki.src.be.api_usage import UsageModel
+
+    main = UsageModel(create_main_model(config), config.main_model)
+    fallback = UsageModel(create_fallback_model(config), config.fallback_model)
     # The default fallback_on (ModelAPIError, or ModelHTTPError on older pydantic-ai)
     # misses UnexpectedModelBehavior, which pydantic-ai raises for a 200 response whose
     # body does not parse (e.g. choices=None from an OpenAI-compatible gateway); without
@@ -404,6 +417,9 @@ def _extract_content(response, model: str) -> Optional[str]:
     instead of surfacing later as an opaque NoneType error.
     """
     _remember_usage(response)
+    from codewiki.src.be.api_usage import record_response
+
+    record_response(getattr(response, "usage", None), model, model=getattr(response, "model", None))
     choice = response.choices[0]
     content = choice.message.content
     finish_reason = getattr(choice, "finish_reason", None)
@@ -437,6 +453,7 @@ def _stream_completion(client: OpenAI, include_usage: bool, **kwargs):
     parts: list[str] = []
     finish_reason = None
     usage = None
+    model_name = None  # the model that actually answered (cost reports price by it)
     started = time.monotonic()
     chunks = 0
     reasoning_chars = 0
@@ -445,6 +462,8 @@ def _stream_completion(client: OpenAI, include_usage: bool, **kwargs):
             chunks += 1
             if getattr(chunk, "usage", None):
                 usage = chunk.usage
+            if getattr(chunk, "model", None):
+                model_name = chunk.model
             for choice in chunk.choices or ():
                 delta = getattr(choice, "delta", None)
                 if delta is not None and getattr(delta, "content", None):
@@ -478,7 +497,9 @@ def _stream_completion(client: OpenAI, include_usage: bool, **kwargs):
             close()
     message = SimpleNamespace(content="".join(parts) if parts else None)
     return SimpleNamespace(
-        choices=[SimpleNamespace(message=message, finish_reason=finish_reason)], usage=usage
+        choices=[SimpleNamespace(message=message, finish_reason=finish_reason)],
+        usage=usage,
+        model=model_name,
     )
 
 
@@ -509,8 +530,9 @@ def call_llm(
     """
     Call LLM with the given prompt.
 
-    Supports openai-compatible, anthropic, and bedrock providers.
-    For bedrock/anthropic, uses litellm to translate the API call.
+    Supports openai-compatible, anthropic, bedrock, azure-openai and google /
+    google-vertex providers. For bedrock/anthropic, uses litellm to translate
+    the API call; Google providers use the google-genai client.
 
     No temperature is sent; requests rely on the provider default (some
     models reject explicit values).
@@ -529,6 +551,12 @@ def call_llm(
         model = config.main_model
 
     provider = getattr(config, "provider", "openai-compatible")
+
+    if is_google_provider(provider):
+        from codewiki.src.be.google_provider import call_google
+
+        text, _LAST_USAGE["usage"] = call_google(prompt, config, model, system_prompt)
+        return text
 
     if provider in ("bedrock", "anthropic"):
         return _call_llm_via_litellm(prompt, config, model, system_prompt)
@@ -627,7 +655,7 @@ def _call_llm_via_litellm(
         max_tokens=config.max_tokens,
         api_key=config.llm_api_key if config.provider != "bedrock" else None,
     )
-    return _extract_content(response, litellm_model)
+    return _extract_content(response, model)
 
 
 def _call_llm_via_azure(
@@ -657,4 +685,4 @@ def _call_llm_via_azure(
         messages=_messages(prompt, system_prompt),
         max_tokens=config.max_tokens,
     )
-    return _extract_content(response, deployment)
+    return _extract_content(response, model)

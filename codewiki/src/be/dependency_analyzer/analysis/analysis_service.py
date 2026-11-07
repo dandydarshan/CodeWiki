@@ -20,6 +20,7 @@ from codewiki.src.be.dependency_analyzer.analysis.cloning import (
 from codewiki.src.be.dependency_analyzer.analysis.repo_analyzer import RepoAnalyzer
 from codewiki.src.be.dependency_analyzer.models.analysis import AnalysisResult
 from codewiki.src.be.dependency_analyzer.models.core import Repository
+from codewiki.src.be.dependency_analyzer.utils.file_selection import is_skipped_source_file
 from codewiki.src.be.dependency_analyzer.utils.security import assert_safe_path, safe_open_text
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -316,6 +317,12 @@ class AnalysisService:
         logger.debug(f"Analyzing {len(supported_files)} supported files.")
 
         result = self.call_graph_analyzer.analyze_code_files(supported_files, repo_dir)
+        # Keep readable source files even when their analyzer emits no symbol
+        # (constants, declarations, module-level scripts, or parse failures).
+        # Explicit analyzer exclusions must not be resurrected as file nodes.
+        result["source_files"] = [
+            info for info in supported_files if not is_skipped_source_file(info, repo_dir)
+        ]
 
         result["call_graph"]["supported_languages"] = self._get_supported_languages()
         result["call_graph"]["unsupported_files"] = len(code_files) - len(supported_files)
@@ -340,7 +347,7 @@ class AnalysisService:
         Filter code files to only include supported languages.
 
         Supports Python, JavaScript, TypeScript, Java, C#, C, C++, PHP, Ruby, Kotlin,
-        Scala, Rust, and Dart.
+        Scala, Rust, Dart, Go, Zig, and Vue single-file components.
         """
         supported_languages = {
             "python",
@@ -357,6 +364,8 @@ class AnalysisService:
             "kotlin",
             "scala",
             "dart",
+            "zig",
+            "vue",
         }
 
         return [
@@ -381,6 +390,9 @@ class AnalysisService:
             "scala",
             "rust",
             "dart",
+            "go",
+            "zig",
+            "vue",
         ]
 
     def _cleanup_repository(self, temp_dir: str):

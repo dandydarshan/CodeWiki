@@ -191,7 +191,7 @@ def test_update_removes_its_scratch_copy_of_the_previous_graph(tmp_path, monkeyp
 
     class Updater:
         def __init__(self, *a):
-            pass
+            self.record = None  # the adapter keeps it before running, for failed runs
 
         async def run(self, prev_path, *a):
             assert os.path.exists(prev_path)  # still there while the diff runs

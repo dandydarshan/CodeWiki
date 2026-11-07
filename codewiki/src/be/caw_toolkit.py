@@ -36,6 +36,8 @@ from codewiki.src.be.dependency_analyzer.utils.paths import (
 from codewiki.src.be.doc_layout import config_layout, module_doc_file
 from codewiki.src.be.generation_progress import progress_of
 from codewiki.src.be.module_naming import skipped_report, plan_sub_module_specs, sub_module_report
+from codewiki.src.be.module_scope import can_split_module, prepare_sized_submodule_partition
+from codewiki.src.config import DEFAULT_MIN_TOKEN_PER_MODULE
 
 if TYPE_CHECKING:
     from codewiki.src.be.caw_backend import CawBackend
@@ -153,7 +155,10 @@ class CawToolKit(
         insert_line: int | str | None = None,
     ) -> str:
         from codewiki.src.be.agent_tools.str_replace_editor import EditTool
-        from codewiki.src.be.utils import validate_mermaid_diagrams
+        from codewiki.src.be.utils import (
+            validate_and_repair_mermaid_diagrams,
+            validate_mermaid_diagrams,
+        )
 
         # ``Literal`` annotations would be the cleanest way to constrain these,
         # but ``from __future__ import annotations`` turns them into forward refs
@@ -236,8 +241,18 @@ class CawToolKit(
 
         result = "\n".join(edit_tool.logs)
 
-        if command != "view" and path.endswith(".md"):
-            mermaid_validation = await validate_mermaid_diagrams(absolute_path, path)
+        if edit_tool.did_write and path.endswith(".md"):
+            before_validation = Path(absolute_path).read_bytes()
+            validator = (
+                validate_mermaid_diagrams
+                if command == "undo_edit"
+                else validate_and_repair_mermaid_diagrams
+            )
+            mermaid_validation = await validator(absolute_path, path)
+            if Path(absolute_path).read_bytes() != before_validation:
+                result = "File saved with repaired Mermaid labels.\n" + edit_tool._make_output(
+                    Path(absolute_path).read_text(encoding="utf-8"), path
+                )
             result = result + "\n---------- Mermaid validation ----------\n" + mermaid_validation
 
         return result
@@ -256,7 +271,9 @@ class CawToolKit(
             "Sub-module names must be unique across the whole wiki. A name already used by another "
             "module is prefixed with the current module name; a name that is already documented "
             "(plain or prefixed) is SKIPPED, not regenerated. The result reports the files actually "
-            "saved and every skipped request."
+            "saved and every skipped request. Children below the configured minimum code-token "
+            "size are merged into a nearby sibling. Partitions with fewer than two viable "
+            "children are rejected; document the module directly instead."
         )
     )
     async def generate_sub_module_documentation(
@@ -303,6 +320,24 @@ class CawToolKit(
         parent_path = list(deps.path_to_current_module)
 
         with tree_lock:
+            # Both size checks read the shared module tree, which concurrent
+            # parents write; keep them under the same lock as the insertion.
+            if not can_split_module(
+                deps.components,
+                deps.module_component_ids(),
+                deps.config,
+                deps.current_depth,
+                max_depth=deps.max_depth,
+            ):
+                return skipped_report(
+                    {
+                        name: "module cannot delegate: file count, token threshold or depth "
+                        "limit; write this module directly"
+                        for name in sub_module_specs
+                    },
+                    module_doc_file(parent_name, parent_path, layout),
+                )
+
             # Resolve name collisions against the module tree and files already
             # on disk before touching the tree (issue #76): names are unique
             # across the wiki. A request that is already documented (plain or
@@ -330,6 +365,22 @@ class CawToolKit(
             value = deps.module_tree
             for key in parent_path:
                 value = value[key]["children"]
+            final_specs, rejected = prepare_sized_submodule_partition(
+                final_specs,
+                deps.module_component_ids(),
+                deps.components,
+                value,
+                getattr(deps.config, "min_token_per_module", DEFAULT_MIN_TOKEN_PER_MODULE),
+                deps.config.max_token_per_module,
+            )
+            for requested, final_name in list(name_map.items()):
+                if final_name not in final_specs:
+                    plan.skipped[requested] = rejected[final_name]
+                    del name_map[requested]
+            if not final_specs:
+                return skipped_report(
+                    plan.skipped, module_doc_file(parent_name, parent_path, layout)
+                )
             for sub_name, core_ids in final_specs.items():
                 value[sub_name] = {"components": core_ids, "children": {}}
 

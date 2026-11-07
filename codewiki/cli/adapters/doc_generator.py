@@ -59,6 +59,24 @@ def _committed_and_clean(path: Path) -> bool:
     return bool(tracked and tracked.strip()) and status is not None and not status.strip()
 
 
+def _is_repo_root(path: Path) -> bool:
+    """True for a git checkout's top folder (never cleared or moved wholesale)."""
+    if (path / ".git").exists():
+        return True
+    import subprocess
+
+    try:
+        out = subprocess.run(
+            ["git", "-C", str(path), "rev-parse", "--show-toplevel"],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return out.returncode == 0 and Path(out.stdout.strip()).resolve() == path.resolve()
+
+
 def _module_file_count(module_info: dict) -> int:
     """Distinct source files in a module and its sub-modules.
 
@@ -285,6 +303,10 @@ class CLIDocumentationGenerator:
             # Decide before anything below writes into docs/: if they are committed and
             # unmodified now, git holds exactly them, so a full build needs no backup copy.
             self._docs_clean_at_start = _committed_and_clean(self.output_dir)
+            if not self._docs_clean_at_start:
+                # Not in git: back them up now, while they are still the previous docs (the
+                # update deletes and rewrites pages before it may fall back to a full build).
+                self._backup_docs()
 
             prev_graph_path = snapshot_old_graph(
                 backend_config.dependency_graph_dir, str(self.repo_path)
@@ -340,6 +362,7 @@ class CLIDocumentationGenerator:
                     backend_config.dependency_graph_dir,
                     keep=graph_file_path(backend_config.dependency_graph_dir, str(self.repo_path)),
                 )
+                self._drop_docs_backup()  # updated in place: the backup is not needed
                 return
             # full_fallback / detector_failure: preserve the old docs, rebuild from scratch
             self._move_docs_aside()
@@ -565,36 +588,64 @@ class CLIDocumentationGenerator:
         self.progress_tracker.complete_stage()
         return record.outcome
 
+    def _backup_docs(self) -> None:
+        """Copy the docs to ``<docs>.prev-<commit>`` beside them, before the update edits them.
+
+        Git-ignored (outside docs/, `git add .` would otherwise commit a full copy); only the
+        latest backup is kept. temp/ is left out: it is the bulk of the size, and the graph
+        is rebuilt from the docs' commit when missing.
+        """
+        import shutil
+
+        if not self.output_dir.is_dir() or _is_repo_root(self.output_dir):
+            return
+        if not any(self.output_dir.iterdir()):
+            return
+        name = self.output_dir.name
+        for old in self.output_dir.parent.glob(f"{name}.prev-*"):
+            if old.is_dir():
+                shutil.rmtree(old, ignore_errors=True)
+        target = self.output_dir.parent / f"{name}.prev-{(self.commit_id or 'unknown')[:8]}"
+        shutil.copytree(self.output_dir, target, ignore=shutil.ignore_patterns("temp"))
+        (target / ".gitignore").write_text(
+            "# CodeWiki backup of the previous docs. Do not commit; delete when done.\n*\n",
+            encoding="utf-8",
+        )
+        self._preserved_docs_dir = str(target)
+
+    def _drop_docs_backup(self) -> None:
+        import shutil
+
+        backup = getattr(self, "_preserved_docs_dir", None)
+        if backup:
+            shutil.rmtree(backup, ignore_errors=True)
+            self._preserved_docs_dir = None
+
     def _move_docs_aside(self) -> None:
         """Clear the output dir for a full rebuild, keeping the previous docs recoverable.
 
-        Docs that were committed and unmodified when the update started are safe in git
-        (the update itself has written into docs/ by now), so nothing is copied. Otherwise
-        the docs move to ``<docs>.prev-<commit>`` next to the output dir: git-ignored (it
-        sits outside docs/, where `git add .` would pick up a full copy of the docs) and
-        only the latest such copy is kept.
+        Docs that were committed and unmodified when the update started are safe in git;
+        others were backed up by ``_backup_docs`` before the update touched them. A repo
+        root is never cleared.
         """
         import shutil
 
         record = getattr(self, "_last_update_record", None)
         name = self.output_dir.name
-        if getattr(self, "_docs_clean_at_start", False):
+        if _is_repo_root(self.output_dir):
+            note = "docs are written to the repo root, which is never cleared"
+        else:
+            if getattr(self, "_docs_clean_at_start", False):
+                note = f"previous docs are in git; restore them with: git restore --source=HEAD {name}/"
+            else:
+                if not getattr(self, "_preserved_docs_dir", None):
+                    self._backup_docs()
+                note = (
+                    f"previous docs saved to {self._preserved_docs_dir} "
+                    "(not committed; delete it when done)"
+                )
             shutil.rmtree(self.output_dir)
             self.output_dir.mkdir(parents=True, exist_ok=True)
-            note = f"previous docs are in git; restore them with: git restore --source=HEAD {name}/"
-        else:
-            for old in self.output_dir.parent.glob(f"{name}.prev-*"):
-                if old.is_dir():
-                    shutil.rmtree(old, ignore_errors=True)
-            target = self.output_dir.parent / f"{name}.prev-{(self.commit_id or 'unknown')[:8]}"
-            shutil.move(str(self.output_dir), str(target))
-            (target / ".gitignore").write_text(
-                "# CodeWiki backup of the previous docs. Do not commit; delete when done.\n*\n",
-                encoding="utf-8",
-            )
-            self.output_dir.mkdir(parents=True, exist_ok=True)
-            self._preserved_docs_dir = str(target)
-            note = f"previous docs moved to {target} (not committed; delete it when done)"
         if record is not None:
             record.detector_notes.append(note)
         self.progress_tracker.note(f"Full rebuild: {note}")

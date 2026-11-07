@@ -344,3 +344,48 @@ def test_codewikis_own_output_is_not_analysed_as_repo_code(tmp_path):
 
     files = analysed_files(repo, repo)  # docs written to the repo root: exclude nothing
     assert "pkg/a.py" in files and "docs/conf.py" in files
+
+
+def test_uncommitted_docs_are_backed_up_before_the_update_edits_them(tmp_path):
+    """The backup used to be taken at fallback time, after the update had deleted pages."""
+    repo = _repo_with_docs(tmp_path)
+    docs = repo / "docs"
+    (docs / "overview.md").write_text("# Edited, not committed\n")
+    (docs / "page.md").write_text("# A page the update deletes\n")
+    (docs / "temp" / "dependency_graphs").mkdir(parents=True)
+    (docs / "temp" / "dependency_graphs" / "g.json").write_text("{}")
+    gen = _gen_for(docs)
+    gen._docs_clean_at_start = False
+    gen._backup_docs()  # what --update does first when docs are not committed
+
+    (docs / "page.md").unlink()  # the update invalidates pages...
+    (docs / "overview.md").write_text("# Half-rewritten\n")  # ...and rewrites others
+    gen._move_docs_aside()  # then falls back to a full build
+
+    backup = repo / "docs.prev-abcdef12"
+    assert (backup / "page.md").read_text() == "# A page the update deletes\n"
+    assert (backup / "overview.md").read_text() == "# Edited, not committed\n"
+    assert not (backup / "temp").exists()  # the graph is rebuilt from git when needed
+    assert os.listdir(docs) == []
+
+
+def test_successful_update_drops_the_backup(tmp_path):
+    repo = _repo_with_docs(tmp_path)
+    (repo / "docs" / "overview.md").write_text("# Edited\n")
+    gen = _gen_for(repo / "docs")
+    gen._backup_docs()
+    assert (repo / "docs.prev-abcdef12").is_dir()
+    gen._drop_docs_backup()
+    assert not list(repo.glob("docs.prev-*"))
+
+
+def test_a_repo_root_is_never_cleared(tmp_path):
+    repo = _repo_with_docs(tmp_path)
+    (repo / "overview.md").write_text("# docs written to the repo root\n")
+    gen = _gen_for(repo)
+    gen._docs_clean_at_start = False
+    gen._backup_docs()
+    gen._move_docs_aside()
+    assert (repo / "overview.md").exists() and (repo / ".git").exists()
+    assert not list(tmp_path.glob("repo.prev-*"))
+    assert "never cleared" in gen.notes[-1]

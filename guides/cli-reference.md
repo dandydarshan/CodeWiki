@@ -28,6 +28,7 @@ the repository first.
 | --- | --- | --- |
 | `--output`, `-o PATH` | `docs` | Where the documentation is written |
 | `--create-branch` | off | Create a git branch for the documentation changes |
+| `-y`, `--yes` | off | Don't ask for confirmation. Without it, `generate` asks before documenting a branch other than the default one or a tree with untracked files, and before overwriting existing docs; it never asks without a terminal (CI) |
 | `--github-pages` | off | Also write `index.html`, a static viewer for GitHub Pages |
 | `--no-cache` | off | Ignore cached results and rebuild everything |
 | `--verbose`, `-v` | off | Show progress details and debug output |

@@ -176,6 +176,43 @@ class GitManager:
             # Detached HEAD
             return "HEAD"
 
+    def default_branch(self) -> Optional[str]:
+        """The remote's default branch (origin/HEAD), else a local main/master, else None."""
+        try:
+            ref = self.repo.git.symbolic_ref("refs/remotes/origin/HEAD")
+            return ref.rsplit("/", 1)[-1]
+        except git.GitCommandError:
+            names = {head.name for head in self.repo.heads}
+            return next((name for name in ("main", "master") if name in names), None)
+
+    def generation_context(self, analysed_dir: Path, output_dir: Path) -> dict:
+        """What `generate` is about to document: branch, commit and uncommitted files.
+
+        Only files under ``analysed_dir`` and outside ``output_dir`` count: those are the
+        ones the analysis reads from disk (staged or not, the content on disk is what goes in).
+        """
+        root = Path(self.repo.working_tree_dir).resolve()
+        analysed, output = Path(analysed_dir).resolve(), Path(output_dir).resolve()
+
+        def relevant(rel: str) -> bool:
+            path = root / rel
+            return path.is_relative_to(analysed) and not path.is_relative_to(output)
+
+        modified = {d.a_path for d in self.repo.index.diff(None)}  # unstaged
+        try:
+            modified |= {d.a_path for d in self.repo.index.diff("HEAD")}  # staged
+            commit = self.repo.head.commit.hexsha[:8]
+        except (ValueError, git.BadName):  # no commit yet
+            commit = None
+        branch = self.get_current_branch()
+        return {
+            "branch": None if branch == "HEAD" else branch,
+            "default_branch": self.default_branch(),
+            "commit": commit,
+            "modified": sorted(p for p in modified if relevant(p)),
+            "untracked": sorted(p for p in self.repo.untracked_files if relevant(p)),
+        }
+
     def get_commit_hash(self) -> str:
         """
         Get current commit hash.

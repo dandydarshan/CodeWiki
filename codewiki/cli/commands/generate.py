@@ -218,6 +218,46 @@ def _invalidate_affected_modules(output_dir: Path, changed_files: list[str], log
         logger.debug(f"Invalidated {len(modules_to_invalidate)} modules for regeneration.")
 
 
+def _confirm_what_is_documented(
+    logger, repo_path: Path, output_dir: Path, assume_yes: bool
+) -> None:
+    """Say which branch and which uncommitted files `generate` documents; ask when that looks
+    unintended (a user generated docs on a bugfix branch without noticing)."""
+    from codewiki.cli.git_manager import GitManager
+
+    try:
+        ctx = GitManager(repo_path).generation_context(repo_path, output_dir)
+    except Exception as e:  # noqa: BLE001 — an odd repo state must not stop generation
+        logger.debug(f"Could not read the git state: {e}")
+        return
+    branch, default = ctx["branch"], ctx["default_branch"]
+    off_default = default is not None and branch != default
+    shown = branch or f"detached HEAD at {ctx['commit']}"
+    parts = [f"branch {shown}" + (f" (not {default})" if off_default else "")]
+    if ctx["commit"]:
+        parts.append(f"commit {ctx['commit']}")
+    if ctx["modified"]:
+        parts.append(f"{len(ctx['modified'])} uncommitted change(s) included")
+    logger.info("Documenting " + ", ".join(parts))
+    untracked = ctx["untracked"]
+    if untracked:
+        more = f" and {len(untracked) - 5} more" if len(untracked) > 5 else ""
+        logger.warning(
+            f"{len(untracked)} untracked file(s) will be analysed and sent to the LLM: "
+            f"{', '.join(untracked[:5])}{more}"
+        )
+    # No terminal (CI, scripts): never block; the line above says what happened.
+    if not (off_default or untracked) or assume_yes or not sys.stdin.isatty():
+        return
+    question = "Generate documentation from this working tree?"
+    if off_default:
+        question = f"You're on '{shown}', not '{default}'. {question}"
+    if not click.confirm(question, default=True):
+        hint = f"git switch {default}" if off_default else "commit, git-ignore or remove them"
+        logger.info(f"Cancelled. To change what is documented: {hint}, then run again.")
+        sys.exit(EXIT_SUCCESS)
+
+
 @click.command(name="generate")
 @click.option(
     "--output",
@@ -230,6 +270,12 @@ def _invalidate_affected_modules(output_dir: Path, changed_files: list[str], log
     "--create-branch",
     is_flag=True,
     help="Create a new git branch for documentation changes",
+)
+@click.option(
+    "--yes",
+    "-y",
+    is_flag=True,
+    help="Don't ask for confirmation (branch check, overwriting existing docs)",
 )
 @click.option(
     "--github-pages",
@@ -473,6 +519,7 @@ def generate_command(
     ctx,
     output: str,
     create_branch: bool,
+    yes: bool,
     github_pages: bool,
     no_cache: bool,
     include: str | None,
@@ -625,6 +672,8 @@ def generate_command(
         check_writable_output(output_dir.parent)
 
         logger.success(f"Output directory: {output_dir}")
+        if is_git_repository(repo_path):
+            _confirm_what_is_documented(logger, repo_path, output_dir, assume_yes=yes)
 
         # If a base commit is specified to compare against, implicitly enable update
         if compare_to:
@@ -684,6 +733,7 @@ def generate_command(
             not update
             and output_dir.exists()
             and list_doc_files(str(output_dir))
+            and not yes
             and not click.confirm(
                 f"\n{output_dir} already contains documentation. Overwrite?", default=True
             )

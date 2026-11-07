@@ -44,3 +44,41 @@ def test_serve_and_ask_say_something_before_their_slow_imports():
     assert (
         _first_line("ask", "--docs", "x", "why?") == f"{ascii('… Loading the docs and code…')} []"
     )
+
+
+VALIDATE = """
+import openai
+seen = {}
+class Unreachable:
+    def __init__(self, **kwargs):
+        seen.update(kwargs)
+        raise RuntimeError("boom: host unreachable")
+openai.OpenAI = Unreachable
+from codewiki.cli.main import cli
+try:
+    cli(["config", "validate"])
+except SystemExit:
+    pass
+print("PROBE", seen.get("max_retries"), seen.get("timeout"))
+"""
+
+
+def test_config_validate_says_it_is_testing_and_why_it_failed(tmp_path):
+    """The connectivity test ran in silence (the SDK retried for seconds), then failed without
+    a reason unless --verbose."""
+    import os
+
+    env = {**os.environ, "HOME": str(tmp_path), "USERPROFILE": str(tmp_path)}
+    env.update(CODEWIKI_NO_KEYRING="1", PYTHONIOENCODING="utf-8")
+    set_args = ["--base-url", "http://127.0.0.1:9/v1", "--api-key", "dummy-key-0123456789"]
+    set_args += ["--main-model", "m", "--cluster-model", "m", "--fallback-model", "m"]
+    setup = f"from codewiki.cli.main import cli\ncli(['config', 'set', *{set_args!r}])"
+    subprocess.run([sys.executable, "-c", setup], env=env, capture_output=True, check=False)
+
+    out = subprocess.run(
+        [sys.executable, "-c", VALIDATE], env=env, capture_output=True, text=True, encoding="utf-8"
+    )
+    text = out.stdout + out.stderr
+    assert "Testing API connectivity..." in text, text
+    assert "Error: boom: host unreachable" in text, text  # the reason, without --verbose
+    assert "PROBE 0 15" in text, text  # one attempt, bounded wait

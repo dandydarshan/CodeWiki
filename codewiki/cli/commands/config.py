@@ -543,6 +543,11 @@ def config_show(output_json: bool):
         sys.exit(handle_error(e))
 
 
+# Connectivity check: one attempt, bounded wait. The SDKs' defaults (2 retries with backoff,
+# a 5 s connect timeout each) kept a wrong URL silent for seconds before saying it failed.
+_PROBE = {"max_retries": 0, "timeout": 15}
+
+
 @config_group.command(name="validate")
 @click.option("--quick", is_flag=True, help="Skip API connectivity test")
 @click.option("--verbose", "-v", is_flag=True, help="Show detailed validation steps")
@@ -724,10 +729,13 @@ def config_validate(quick: bool, verbose: bool):
                     fg="green",
                 )
         elif not quick:
+            # Always say so: the import and the request can take a while, in silence otherwise.
             if verbose:
                 click.echo()
                 click.echo("[5/5] Testing API connectivity...")
                 click.echo(f"      URL: {config.base_url}")
+            else:
+                click.echo("Testing API connectivity...")
 
             try:
                 base_url_lower = (config.base_url or "").lower()
@@ -740,19 +748,20 @@ def config_validate(quick: bool, verbose: bool):
                         api_key=api_key,
                         api_version=config.api_version,
                         azure_endpoint=config.base_url,
+                        **_PROBE,
                     )
                     client.models.list()
                 elif "api.anthropic.com" in base_url_lower:
                     # Use Anthropic SDK for native Anthropic endpoints
                     import anthropic
 
-                    client = anthropic.Anthropic(api_key=api_key)
+                    client = anthropic.Anthropic(api_key=api_key, **_PROBE)
                     client.models.list(limit=1)
                 else:
                     # Use OpenAI SDK for OpenAI-compatible endpoints
                     from openai import OpenAI
 
-                    client = OpenAI(api_key=api_key, base_url=config.base_url)
+                    client = OpenAI(api_key=api_key, base_url=config.base_url, **_PROBE)
                     client.models.list()
 
                 if verbose:
@@ -761,8 +770,7 @@ def config_validate(quick: bool, verbose: bool):
                     click.secho("✓ API connectivity test successful", fg="green")
             except Exception as e:
                 click.secho("✗ API connectivity test failed", fg="red")
-                if verbose:
-                    click.echo(f"      Error: {e}")
+                click.echo(f"      Error: {e}")
                 sys.exit(EXIT_CONFIG_ERROR)
 
         # Success

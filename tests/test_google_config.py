@@ -253,3 +253,13 @@ def test_leaving_google_keeps_explicit_fallback(tmp_config):
     manager.save(provider="google-vertex", main_model=MODEL, cluster_model=MODEL)
     manager.save(provider="openai-compatible", fallback_model="gpt-5-mini")
     assert manager.get_config().fallback_model == "gpt-5-mini"
+
+
+def test_validate_names_the_credentials_file_when_there_is_no_keyring(tmp_config, access_checks):
+    cm.ConfigManager().save(
+        api_key="test-gemini-key", provider="google", main_model=MODEL, cluster_model=MODEL
+    )
+    result = CliRunner().invoke(config_validate, [])
+    assert result.exit_code == 0, result.output
+    assert "keychain" not in result.output.replace("System keychain", "")
+    assert "credentials.json (owner-only permissions, not encrypted)" in result.output

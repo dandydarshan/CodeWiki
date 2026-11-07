@@ -33,8 +33,10 @@ def _safe_doc_path(session: SessionState, filename: str) -> Path | None:
     """Resolve *filename* within session.output_dir, guarding against traversal."""
     if not filename.endswith(".md"):
         filename += ".md"
+    from codewiki.src.be.agent_tools.str_replace_editor import docs_relative
+
     output_base = Path(session.output_dir).resolve()
-    doc_path = (output_base / filename).resolve()
+    doc_path = (output_base / docs_relative(filename, str(output_base))).resolve()
     if not _is_within(doc_path, output_base):
         return None
     return doc_path

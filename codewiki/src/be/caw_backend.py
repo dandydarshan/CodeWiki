@@ -33,7 +33,11 @@ from typing import Any
 from codewiki._vendor.caw import Agent as CawAgent
 from codewiki._vendor.caw import ToolGroup
 from codewiki.src.be.agent_tools.deps import CodeWikiDeps
-from codewiki.src.be.agent_tools.doc_guard import DocumentationWriteError, doc_written
+from codewiki.src.be.agent_tools.doc_guard import (
+    DocumentationWriteError,
+    discard_partial_page,
+    doc_written,
+)
 from codewiki.src.be.backend import AgentReply, LLMBackend
 from codewiki.src.be.context_budget import prompt_budget
 from codewiki.src.be.dependency_analyzer.models.core import Node
@@ -600,53 +604,58 @@ class CawBackend(LLMBackend):
         run_cwd = working_dir if self._caw_provider == "codex" else self._repo_root
         slot = self.slots.hold() if hold_slot else contextlib.nullcontext()
         started = time.time()
-        try:
-            with slot:
-                try:
-                    traj = agent.completion(user_prompt, cwd=run_cwd)
-                finally:
-                    # Keep agent-inserted children resumable even if the run fails.
-                    shared.save(module_tree_path, deps.module_tree)
-            # Nested sub-module agents are separate CLI processes that record
-            # their own usage, so this covers only this module's own run.
-            usage = self._record_usage(
-                "module_agent",
-                module_name,
-                getattr(traj, "total_usage", None),
-                seconds=time.time() - started,
-                model=getattr(traj, "model", None) or self._model,
-            )
-            logger.info(
-                "Module %s completed via caw (turns=%d, tool_calls=%d, cost=$%.4f)",
-                module_name,
-                traj.num_turns,
-                traj.total_tool_calls,
-                (usage or {}).get("cost_usd", 0.0),
-            )
-            save_unwritten_doc(
-                os.path.join(
-                    working_dir,
-                    module_doc_file(module_name, list(module_path), config_layout(config)),
-                ),
-                getattr(traj, "result", ""),
-                module_name,
-            )
-            if not doc_written(working_dir, module_name, list(module_path), deps.module_tree):
-                doc_file = module_doc_file(module_name, list(module_path), config_layout(config))
-                logger.error(
-                    "Agent for %s finished without writing %s (turns=%d, tool_calls=%d). "
-                    "Final answer: %s",
+        with discard_partial_page(working_dir, module_name, list(module_path), deps.module_tree):
+            try:
+                with slot:
+                    try:
+                        traj = agent.completion(user_prompt, cwd=run_cwd)
+                    finally:
+                        # Keep agent-inserted children resumable even if the run fails.
+                        shared.save(module_tree_path, deps.module_tree)
+                # Nested sub-module agents are separate CLI processes that record
+                # their own usage, so this covers only this module's own run.
+                usage = self._record_usage(
+                    "module_agent",
                     module_name,
-                    doc_file,
+                    getattr(traj, "total_usage", None),
+                    seconds=time.time() - started,
+                    model=getattr(traj, "model", None) or self._model,
+                )
+                logger.info(
+                    "Module %s completed via caw (turns=%d, tool_calls=%d, cost=$%.4f)",
+                    module_name,
                     traj.num_turns,
                     traj.total_tool_calls,
-                    " ".join((getattr(traj, "result", None) or "").split())[:300] or "<empty>",
+                    (usage or {}).get("cost_usd", 0.0),
                 )
-                raise DocumentationWriteError(f"Agent for {module_name} has not written {doc_file}")
-            with shared.lock:
-                validate_module_file_coverage(deps.module_tree, components)
-            shared.save(module_tree_path, deps.module_tree)
-            return deps.module_tree
-        except Exception as e:
-            logger.error("Error processing module %s via caw: %s", module_name, e)
-            raise
+                save_unwritten_doc(
+                    os.path.join(
+                        working_dir,
+                        module_doc_file(module_name, list(module_path), config_layout(config)),
+                    ),
+                    getattr(traj, "result", ""),
+                    module_name,
+                )
+                if not doc_written(working_dir, module_name, list(module_path), deps.module_tree):
+                    doc_file = module_doc_file(
+                        module_name, list(module_path), config_layout(config)
+                    )
+                    logger.error(
+                        "Agent for %s finished without writing %s (turns=%d, tool_calls=%d). "
+                        "Final answer: %s",
+                        module_name,
+                        doc_file,
+                        traj.num_turns,
+                        traj.total_tool_calls,
+                        " ".join((getattr(traj, "result", None) or "").split())[:300] or "<empty>",
+                    )
+                    raise DocumentationWriteError(
+                        f"Agent for {module_name} has not written {doc_file}"
+                    )
+                with shared.lock:
+                    validate_module_file_coverage(deps.module_tree, components)
+                shared.save(module_tree_path, deps.module_tree)
+                return deps.module_tree
+            except Exception as e:
+                logger.error("Error processing module %s via caw: %s", module_name, e)
+                raise

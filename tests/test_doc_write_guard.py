@@ -330,3 +330,57 @@ def test_whole_repo_generation_replaces_or_restores_incomplete_overview(
         asyncio.run(gen.generate_module_documentation({}, []))
         assert page.read_text() == "# Repository\n\nComplete documentation."
         assert not (tmp_path / "repo.md").exists()
+
+
+@pytest.mark.parametrize("kind", ["pydantic", "caw"])
+def test_failed_agent_leaves_no_partial_page_for_resume_to_skip(tmp_path, monkeypatch, kind):
+    def run(prompt, deps):
+        (tmp_path / "child.md").write_text("# Child\n\nHalf a page", encoding="utf-8")
+        raise RuntimeError("agent crashed")
+
+    backend = _backend(tmp_path, monkeypatch, kind, run)
+    with pytest.raises(RuntimeError, match="agent crashed"):
+        asyncio.run(backend.run_module_agent("child", {}, [], ["child"], str(tmp_path)))
+    assert not (tmp_path / "child.md").exists()  # the next run retries it
+
+
+def test_existing_page_is_kept_when_a_later_run_fails(tmp_path):
+    from codewiki.src.be.agent_tools.doc_guard import discard_partial_page
+
+    page = tmp_path / "child.md"
+    page.write_text("# Child\n\nFinished earlier.", encoding="utf-8")
+    with pytest.raises(RuntimeError), discard_partial_page(str(tmp_path), "child", ["child"], {}):
+        raise RuntimeError("failed")
+    assert page.read_text(encoding="utf-8") == "# Child\n\nFinished earlier."
+
+
+@pytest.mark.parametrize("kind", ["pydantic", "caw", "mcp"])
+def test_docs_folder_name_in_path_does_not_nest_pages(tmp_path, kind):
+    from codewiki.src.be.agent_tools.str_replace_editor import docs_relative, str_replace_editor
+
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    assert docs_relative("./docs/a/b.md", str(docs)) == "a/b.md"
+    assert docs_relative("docs.md", str(docs)) == "docs.md"
+    (docs / "docs").mkdir()
+    assert docs_relative("docs/x.md", str(docs)) == "docs/x.md"  # a real subfolder is kept
+    (docs / "docs").rmdir()
+
+    deps = _deps(docs)
+    deps.absolute_repo_path = str(tmp_path)
+    args = dict(working_dir="docs", command="create", path="docs/page.md", file_text="# P\n")
+    if kind == "pydantic":
+        asyncio.run(str_replace_editor(SimpleNamespace(deps=deps), **args))
+    elif kind == "caw":
+        from codewiki.src.be.caw_toolkit import CawToolKit
+
+        toolkit = CawToolKit(deps=deps, backend=SimpleNamespace(), allow_subagent=False)
+        asyncio.run(toolkit.str_replace_editor(**args))
+    else:
+        from codewiki.mcp.tools.doc_writer import _safe_doc_path
+
+        session = SimpleNamespace(output_dir=str(docs))
+        assert _safe_doc_path(session, "docs/page.md") == (docs / "page.md").resolve()
+        return
+    assert (docs / "page.md").read_text(encoding="utf-8") == "# P\n"
+    assert not (docs / "docs").exists()

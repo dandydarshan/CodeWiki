@@ -327,3 +327,28 @@ def test_repo_walk_survives_windows_device_names(docs, monkeypatch):
         assert find_references(index, "MAX_AGE").all_ids
     finally:
         os.remove(nul)  # pytest's own cleanup cannot delete it on Windows
+
+
+def test_code_is_read_with_its_file_line_numbers(docs):
+    repo, docs_dir = docs
+    r = Retriever(QAIndex(str(docs_dir)))
+    uid = "pkg/timed.py::TimestampSigner"
+    file_lines = (repo / "pkg" / "timed.py").read_text(encoding="utf-8").splitlines()
+
+    def check(text):
+        numbered = [
+            line
+            for line in text.splitlines()
+            if "| " in line and line.split("|")[0].strip().isdigit()
+        ]
+        assert numbered, text[:200]
+        for line in numbered:
+            number, code = line.split("| ", 1)
+            assert file_lines[int(number) - 1].strip() == code.strip(), line
+
+    full = r.read_one(uid)
+    check(full.text)
+    assert full.text.splitlines()[0].lstrip().startswith(f"{r.index.code[uid].start_line}| ")
+    focused = r.assemble([uid], full.tokens // 3, focus="get_timestamp")[0]
+    assert focused.truncated and "def get_timestamp" in focused.text
+    check(focused.text)  # a cut keeps whole lines, so the numbers still match the file

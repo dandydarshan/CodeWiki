@@ -67,6 +67,7 @@ jobs:
           "$RUNNER_TEMP/smoke/Scripts/python" -m pip install dist/*.whl
           cd "$RUNNER_TEMP"
           "$RUNNER_TEMP/smoke/Scripts/python" -m codewiki --help
+          "$RUNNER_TEMP/smoke/Scripts/codewiki" --version  # the launcher, not -m: __main__.py stays source
           bash "$GITHUB_WORKSPACE/packaging/build/test_wheel.sh" "$RUNNER_TEMP/smoke/Scripts/python" "$GITHUB_WORKSPACE"
 
       - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
@@ -108,7 +109,7 @@ jobs:
             venv="$RUNNER_TEMP/smoke-$v"
             "python$v" -m venv "$venv"
             "$venv/bin/python" -m pip install dist-linux/*-cp${v/./}-*.whl
-            (cd "$RUNNER_TEMP" && "$venv/bin/python" -m codewiki --help)
+            (cd "$RUNNER_TEMP" && "$venv/bin/python" -m codewiki --help && "$venv/bin/codewiki" --version)
             bash packaging/build/test_wheel.sh "$venv/bin/python" "$GITHUB_WORKSPACE"
             echo "::endgroup::"
           done
@@ -175,6 +176,7 @@ jobs:
           "$RUNNER_TEMP/smoke/bin/python" -m pip install wheelhouse/*.whl
           cd "$RUNNER_TEMP"
           "$RUNNER_TEMP/smoke/bin/python" -m codewiki --help
+          "$RUNNER_TEMP/smoke/bin/codewiki" --version
           bash "$GITHUB_WORKSPACE/packaging/build/test_wheel.sh" "$RUNNER_TEMP/smoke/bin/python" "$GITHUB_WORKSPACE"
 
       - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
@@ -215,6 +217,7 @@ jobs:
           "$RUNNER_TEMP/smoke/bin/python" -m pip install wheelhouse/*.whl
           cd "$RUNNER_TEMP"
           "$RUNNER_TEMP/smoke/bin/python" -m codewiki --help
+          "$RUNNER_TEMP/smoke/bin/codewiki" --version
           "$RUNNER_TEMP/smoke/bin/python" -c "import codewiki.cli.main as m; assert m.__file__.endswith('.so'), m.__file__; print('compiled:', m.__file__)"
           bash "$GITHUB_WORKSPACE/packaging/build/test_wheel.sh" "$RUNNER_TEMP/smoke/bin/python" "$GITHUB_WORKSPACE"
 

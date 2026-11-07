@@ -201,3 +201,20 @@ def test_listed_files_can_be_read_whole_as_the_note_says(tmp_path, kind):
     assert "LINE_1 = 1" in first and "LINE_3000" not in first  # clipped: page with view_range
     tail = view(working_dir="repo", command="view", path="m/big.py", view_range=[2990, -1])
     assert "LINE_3000 = 3000" in tail
+
+
+def test_cluster_prompt_details_only_the_modules_surroundings(repo):
+    _, tree = repo
+    prompt = pt.format_cluster_prompt("<components>", tree, "invoices")
+    tree_text = prompt.split(pt.CLUSTER_TREE_FOCUSED_NOTE)[1]
+    assert "billing/inv.py: Inv" in tree_text and "billing/core.py: Core" in tree_text
+    assert "payments/pay.py" not in tree_text and "payments" in tree_text
+
+    huge = {f"mod{i}": {"components": [f"f{i}.py::C{j}" for j in range(50)]} for i in range(200)}
+    huge["mod0"]["children"] = {"target": {"components": ["t.py::T"], "children": {}}}
+    focused = pt.format_cluster_prompt("<components>", huge, "target", max_tokens=1_500)
+    assert count_tokens(focused) <= 1_500  # unrelated modules' 10k components left out
+    assert "t.py: T" in focused and "f5.py" not in focused and "mod5" in focused
+    assert pt.MODULE_TREE_TRIMMED_NOTE not in focused
+    tight = pt.format_cluster_prompt("<components>", huge, "target", max_tokens=500)
+    assert pt.MODULE_TREE_TRIMMED_NOTE in tight and "t.py: T" not in tight

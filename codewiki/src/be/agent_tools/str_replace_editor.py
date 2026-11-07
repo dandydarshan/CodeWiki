@@ -98,7 +98,7 @@ def docs_relative(path: str, docs_root: str) -> str:
     parts = [part for part in Path(path).parts if part != "."]
     name = Path(docs_root).name
     if len(parts) > 1 and parts[0] == name and not (Path(docs_root) / name).is_dir():
-        return str(Path(*parts[1:]))
+        return "/".join(parts[1:])  # "/" works on every OS and keeps results comparable
     return path
 
 

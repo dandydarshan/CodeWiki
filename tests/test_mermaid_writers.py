@@ -60,6 +60,8 @@ def load_toolkit_class(monkeypatch):
 
     monkeypatch.setitem(sys.modules, "caw", SimpleNamespace(ToolKit=ToolKit, tool=tool))
     path = Path(__file__).parents[1] / "codewiki/src/be/caw_toolkit.py"
+    if not path.exists():
+        pytest.skip("needs the source tree (the wheel tests run without it)")
     spec = importlib.util.spec_from_file_location("_mermaid_test_caw_toolkit", path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
@@ -284,7 +286,10 @@ def test_generation_prompts_share_formatted_guidance(prompt_type):
 def test_updater_prompts_and_skill_share_guidance():
     assert MERMAID_GUIDELINES in format_update_system_prompt("leaf", "Portuguese")
     assert MERMAID_GUIDELINES in format_stale_fix_system_prompt("Portuguese")
-    skill = (Path(__file__).parents[1] / "skills/codewiki-wiki-generator/SKILL.md").read_text()
+    skill_path = Path(__file__).parents[1] / "skills/codewiki-wiki-generator/SKILL.md"
+    if not skill_path.exists():
+        pytest.skip("needs the source tree (the wheel tests run without it)")
+    skill = skill_path.read_text()
     for example in [
         'C{"msg.error()?"}',
         'D["config[key]"]',

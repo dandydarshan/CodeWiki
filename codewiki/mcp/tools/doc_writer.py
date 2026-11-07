@@ -59,6 +59,12 @@ async def _validate_mermaid(file_path: str, relative_path: str, *, repair: bool 
         return f"Warning: Mermaid validation unavailable: {e}"
 
 
+def _write_doc(path: Path, text: str) -> None:
+    # Bytes, not write_text: on Windows text mode turns \n into \r\n, and edits read the raw
+    # bytes back, so an agent's old_str (with \n) would never match again.
+    path.write_bytes(text.encode("utf-8"))
+
+
 def _save_history(session: SessionState, doc_path: Path, content: str) -> None:
     """Append *content* to edit history for *doc_path*, capped at _MAX_HISTORY_PER_FILE."""
     history = session.registry.get("file_history")
@@ -99,7 +105,7 @@ async def handle_write_doc_file(
             {"error": f"File already exists: {filename}. Use edit_doc_file to modify it."}
         )
 
-    await asyncio.to_thread(doc_path.write_text, content, "utf-8")
+    await asyncio.to_thread(_write_doc, doc_path, content)
     session.docs_written += 1
 
     # Mermaid validation
@@ -143,7 +149,7 @@ async def handle_edit_doc_file(
         old_content = path_history.pop()
         history[str(doc_path)] = path_history
         session.registry["file_history"] = history
-        await asyncio.to_thread(doc_path.write_text, old_content, "utf-8")
+        await asyncio.to_thread(_write_doc, doc_path, old_content)
 
         # Validate Mermaid after undo
         mermaid_result = await _validate_mermaid(str(doc_path), filename, repair=False)
@@ -181,7 +187,7 @@ async def handle_edit_doc_file(
         # Save history only for edits that actually happen, so undo never
         # pops a no-op entry left behind by a failed/rejected command.
         _save_history(session, doc_path, current_content)
-        await asyncio.to_thread(doc_path.write_text, new_content, "utf-8")
+        await asyncio.to_thread(_write_doc, doc_path, new_content)
 
         # Snippet around the edit
         replacement_line = current_content.split(old_str)[0].count("\n")
@@ -202,7 +208,7 @@ async def handle_edit_doc_file(
         lines = lines[:insert_line] + new_str_lines + lines[insert_line:]
         new_content = "\n".join(lines)
         _save_history(session, doc_path, current_content)
-        await asyncio.to_thread(doc_path.write_text, new_content, "utf-8")
+        await asyncio.to_thread(_write_doc, doc_path, new_content)
 
         start = max(0, insert_line - 4)
         end = min(len(lines), start + len(new_str_lines) + 8)

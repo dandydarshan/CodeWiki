@@ -2,7 +2,6 @@
 
 import asyncio
 import json
-import os
 from types import SimpleNamespace
 
 import pytest
@@ -469,9 +468,7 @@ def test_full_fallback_keeps_attempt_costs_and_prior_history(tmp_path):
     assert metadata["update_history"][0]["run_id"] == "old"
     assert metadata["last_update"]["usage"] == metadata["usage"]
     # Recorded relative to the docs folder: published metadata never names local paths.
-    assert metadata["last_update"]["previous_docs"] == os.path.relpath(
-        instance._preserved_docs_dir, output
-    )
+    assert metadata["last_update"]["previous_docs"] == "../docs.prev-new"
 
 
 def test_direct_generation_failure_saves_available_usage(tmp_path):

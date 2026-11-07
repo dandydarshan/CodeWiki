@@ -797,9 +797,11 @@ class EditTool:
 
     def read_file(self, path: Path):
         """Read the content of a file from a given path; raise a ToolError if an error occurs."""
+        # UTF-8 first: on Windows the locale codec (cp1252) "decodes" UTF-8 pages into
+        # mojibake, which writing back as UTF-8 then makes permanent.
         encodings = [
-            (None, None),
             ("utf-8", None),
+            (None, None),
             ("latin-1", None),
             ("utf-8", "replace"),
         ]

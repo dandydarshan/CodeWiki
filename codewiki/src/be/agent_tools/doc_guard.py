@@ -102,11 +102,16 @@ def summarize_tool_activity(messages: list[Any]) -> str:
                             writes[part.tool_call_id] = command
         elif isinstance(message, ModelRequest):
             for part in message.parts:
-                if isinstance(part, ToolReturnPart) and part.tool_call_id in writes:
+                # pydantic-ai 2.x returns a rejected call as a ToolReturnPart marked "retried".
+                retried = isinstance(part, ToolReturnPart) and (
+                    getattr(part, "outcome", None) == "retried"
+                )
+                if (isinstance(part, RetryPromptPart) or retried) and part.tool_name:
+                    response = part.model_response() if not retried else str(part.content)
+                    rejected.append(f"{part.tool_name}: {_excerpt(response)}")
+                elif isinstance(part, ToolReturnPart) and part.tool_call_id in writes:
                     lines = str(part.content).strip().splitlines()
                     results[part.tool_call_id] = _excerpt(lines[0] if lines else "")
-                elif isinstance(part, RetryPromptPart) and part.tool_name:
-                    rejected.append(f"{part.tool_name}: {_excerpt(part.model_response())}")
 
     summary = [
         "tool calls: "

@@ -14,7 +14,7 @@ cp config.example.env config.env      # fill in api-key and models
 python release_check.py --repo https://github.com/you/project.git --config config.env --wheel ./wheels
 
 # post-publish: from PyPI
-python release_check.py --repo https://github.com/you/project.git --config config.env --package nc-codewiki==2.0.2
+python release_check.py --repo https://github.com/you/project.git --config config.env --package nc-codewiki==2.1.0
 
 # no --wheel/--package: asks which one
 python release_check.py --repo https://github.com/you/project.git --config config.env

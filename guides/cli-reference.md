@@ -1,6 +1,6 @@
 # CLI reference
 
-Every command and flag of the `codewiki` CLI, as of 2.0.0. For a short
+Every command and flag of the `codewiki` CLI, as of 2.1.0. For a short
 introduction, start with the [README](../README.md).
 
 Commands:
@@ -8,6 +8,9 @@ Commands:
 | Command | What it does |
 | --- | --- |
 | `codewiki generate` | Build or update the documentation for the current directory |
+| `codewiki serve` | Serve the docs site with an Ask AI chat, see [Ask AI](ask-ai.md) |
+| `codewiki ask` | Answer a question from the docs and code in the terminal, see [Ask AI](ask-ai.md) |
+| `codewiki techdocs` | Export existing docs as a Backstage TechDocs project |
 | `codewiki config set` | Store provider, model, and token settings |
 | `codewiki config pricing set/show/remove` | Manage API model rates in USD per million tokens |
 | `codewiki config agent` | Store default include/exclude/focus/doc-type/instructions |
@@ -33,7 +36,7 @@ the repository first.
 | `--github-pages` | off | Also write `index.html`, a static viewer for GitHub Pages |
 | `--techdocs` | off | Also export a Backstage TechDocs project (`mkdocs.yml` + `docs/`) after generation. See [`codewiki techdocs`](#codewiki-techdocs) |
 | `--techdocs-dir PATH` | `techdocs` | Where `--techdocs` writes. Must be outside `--output` |
-| `--no-cache` | off | Ignore cached results and rebuild everything |
+| `--no-cache` | off | Rebuild from scratch: new module tree and every page. Without it a run resumes, reusing the module tree and every existing page. The old docs stay recoverable: `git restore` if committed, else a `<docs>.prev-<commit>` copy. Not with `--update` |
 | `--verbose`, `-v` | off | Show progress details and debug output |
 | `--prompt-caching` / `--no-prompt-caching` | enabled | Add prompt-cache breakpoints to agent calls. Falls back to normal calls if the provider rejects them |
 
@@ -170,13 +173,40 @@ Module sizes include all indexed components in the files a module owns, using
 the GPT-4 tokenizer. Both agent backends apply the minimum to new child pages
 and reject a partition that collapses to one child. Delegation requires at
 least `max(2 * min_token_per_module, max_token_per_leaf_module * depth)` code
-tokens, multiple files, and a depth below `max_depth`. Delegation depth starts
+tokens, multiple files, and a depth below `max_depth` (or, for a module too
+big for one prompt, up to two levels past it; see
+[Agents and context](#agents-and-context)). Delegation depth starts
 at 1, so the default token gates are 8,000, 16,000, 24,000, and so on; reaching
 the gate allows delegation without requiring it. A small repository stays
 on one overview page. Whole files remain indivisible, so an oversized file
 can exceed the upper threshold, including nearby small files merged into it.
-Cached module trees are retained; generate into a fresh output directory to
-apply these rules throughout an existing tree.
+Cached module trees are retained; use `--no-cache` to apply these rules
+throughout an existing tree.
+
+### Agents and context
+
+| Flag | Stored default | Meaning |
+| --- | --- | --- |
+| `--concurrency N` | `4` | Module agents running at the same time. Sub-modules share the same slots. `--update` runs changed leaves one at a time |
+| `--request-limit N` | `100` | Maximum model requests per agent run |
+| `--agent-retries N` | `3` | Retries for a failing agent tool call |
+| `--max-context-tokens N` | `0` (auto) | The model's context window. With `0`, OpenAI-compatible providers learn it from their first context-length error; set it for Gemini and subscription mode |
+| `--main-model`, `--cluster-model`, `--fallback-model` | stored | Models for this run only |
+
+When the window is known, prompts are sized to it; the 900,000-character cap
+that Codex enforces applies either way:
+
+- A module's prompt carries its own code in full and lists components only for
+  its parent, siblings, children, and the modules its code uses or is used by.
+  Other modules appear by name.
+- The first prompt uses at most 60% of the window, leaving room for the agent's
+  tool calls.
+- A module whose code does not fit may split up to two levels past
+  `--max-depth`. If it still does not fit, whole files are inlined while they
+  fit and the rest are listed for the agent to read in full. No file is cut.
+- Each module page ends with a hidden `<!-- codewiki:summary ... -->` comment.
+  When a parent's child pages do not fit its overview prompt, the largest are
+  reduced to that summary and their outline before anything is clipped.
 
 ### Examples
 
@@ -193,6 +223,8 @@ codewiki generate --instructions "Focus on public APIs and include usage example
 codewiki generate --language ja                     # docs in Japanese
 codewiki generate --flat                            # all pages in ./docs, no folders
 codewiki generate --max-tokens 16384 --max-depth 3
+codewiki generate --concurrency 8 --max-context-tokens 200000
+codewiki generate --no-cache                        # rebuild instead of resuming
 ```
 
 ---
@@ -289,6 +321,18 @@ codewiki config validate        # checks settings and calls the provider once
 codewiki config validate --skip-api-test --verbose
 ```
 
+## `codewiki serve` and `codewiki ask`
+
+```bash
+codewiki serve                          # docs site with an Ask AI chat on localhost
+codewiki serve --docs out --port 8770
+codewiki ask "where is the signature verified?"
+codewiki ask --json --session <id> "and who calls it?"
+```
+
+Every flag, the chat on GitHub Pages, and how answers are found are in
+[Ask AI](ask-ai.md).
+
 ## `codewiki mcp`
 
 Starts CodeWiki as an MCP server on stdio. Add it to your IDE's MCP
@@ -307,4 +351,6 @@ configuration as:
 
 The server needs no LLM configuration. The IDE agent supplies the reasoning
 and CodeWiki supplies the analysis tools. See
-[MCP / IDE-driven mode](mcp-ide-mode.md).
+[MCP / IDE-driven mode](mcp-ide-mode.md). Over generated docs it also offers
+question tools (`codewiki_search`, `codewiki_read`, `codewiki_impact`,
+`codewiki_outline`, `codewiki_status`, `codewiki_ask`); see [Ask AI](ask-ai.md).

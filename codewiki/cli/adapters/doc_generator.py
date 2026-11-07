@@ -314,6 +314,8 @@ class CLIDocumentationGenerator:
         # the builder overwrites it, so the updater can diff old against new.
         update_opts = self._update_options()
         prev_graph_path = None
+        if self.config.get("no_cache") and update_opts is None:
+            self._start_fresh()
         if update_opts is not None:
             from codewiki.src.be.updater.graph_store import (
                 rebuild_graph_at_commit,
@@ -644,6 +646,13 @@ class CLIDocumentationGenerator:
             encoding="utf-8",
         )
         self._preserved_docs_dir = str(target)
+
+    def _start_fresh(self) -> None:
+        """--no-cache: a plain run resumes (it reuses the module tree and every existing
+        page); clear the docs instead, keeping the old ones recoverable."""
+        if self.output_dir.is_dir() and any(self.output_dir.iterdir()):
+            self._docs_clean_at_start = _committed_and_clean(self.output_dir)
+            self._move_docs_aside()
 
     def _drop_docs_backup(self) -> None:
         import shutil

@@ -70,6 +70,11 @@ Eight fine-grained tools, none of which calls an LLM, plus two legacy tools.
 | `generate_docs` (legacy) | One-shot generation through CodeWiki's own agents. Needs `codewiki config set` |
 | `get_module_tree` (legacy) | Read an existing `module_tree.json` |
 
+Once docs exist, six more tools answer questions about the code from them:
+`codewiki_outline`, `codewiki_status`, `codewiki_search`, `codewiki_read` and
+`codewiki_impact` use no LLM, and `codewiki_ask` answers with CodeWiki's own
+provider. See [Ask AI](ask-ai.md#in-an-ide-the-mcp-tools).
+
 **File side-channel.** Large payloads never go through the MCP channel. The
 server writes them to `<repo>/.codewiki/sessions/<session_id>/` and returns
 file paths. The agent reads those files with its own file tools. There is no

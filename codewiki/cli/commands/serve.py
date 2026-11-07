@@ -47,6 +47,8 @@ def serve_command(docs_dir, port, host, allow_origins, model, no_log_questions):
     served at once. Answers use your CodeWiki config (`codewiki config set`);
     nothing leaves your machine except the LLM calls themselves.
     """
+    # Before the imports below, which take seconds on some machines (compiled wheel on Windows).
+    click.echo("Starting CodeWiki serve…")
     from codewiki.src.be.qa import DocsNotFoundError, get_index, resolve_docs_dir
     from codewiki.src.be.qa.server import default_origins, find_free_port, origin_of, serve
 

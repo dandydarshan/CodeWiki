@@ -256,3 +256,21 @@ def test_parent_failure_does_not_skip_independent_modules_or_pass_silently(tmp_p
     with pytest.raises(RuntimeError, match="parent: invalid parent response"):
         asyncio.run(gen.generate_module_documentation({}, []))
     assert (tmp_path / "independent.md").read_text(encoding="utf-8") == VALID
+
+
+def test_parent_written_from_child_summaries_when_children_do_not_fit(tmp_path):
+    # The overview path is shared by both backends; only backend.complete differs.
+    gen = generator(tmp_path, [VALID])
+    gen.config.max_context_tokens = 6_000  # the window sets the overview budget
+    filler = "Long explanation of internals. " * 600
+    for name in ("build_and_deployment", "bootstrap"):
+        (tmp_path / f"{name}.md").write_text(
+            f"# {name}\n\nIntro of {name}.\n\n{filler}\n\n## Usage\n\nHow {name} is used.\n\n"
+            f"{filler}\n\n<!-- codewiki:summary\n{name.upper()}_SUMMARY\n-->\n",
+            encoding="utf-8",
+        )
+    asyncio.run(gen.generate_parent_module_docs(["parent"], str(tmp_path)))
+    prompt, _ = gen.backend.calls[0]
+    for name in ("build_and_deployment", "bootstrap"):
+        assert f"{name.upper()}_SUMMARY" in prompt and f"How {name} is used." in prompt
+    assert "Excerpt truncated" not in prompt

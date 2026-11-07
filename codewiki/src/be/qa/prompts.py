@@ -71,6 +71,8 @@ ANSWER_SYSTEM = (
     "You answer a developer's question about their codebase using only the documentation "
     "sections and source code provided. Be precise and concise. Cite every claim with the "
     "unit's location in backticks, e.g. `src/pkg/mod.py:L10-L42` or `Module.md#section`. "
+    "Code lines start with their line number in the file (`42| ...`); cite those exact "
+    "numbers, never count lines yourself. "
     "Prefer the code over documentation marked stale. If the context does not contain the "
     "answer, say what is missing instead of guessing. Quote at most a few lines of code; "
     "cite the location instead of copying code the reader can open."

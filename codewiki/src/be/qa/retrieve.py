@@ -277,7 +277,7 @@ class Retriever:
             stale = sec.stale
         elif uid in ix.code:
             unit = ix.code[uid]
-            text = unit.source
+            text = _numbered(unit.source, unit.start_line) if unit.start_line else unit.source
             kind, location, title, stale = unit.kind, unit.location, unit.signature, False
         else:
             return None
@@ -331,6 +331,17 @@ class Retriever:
             if used >= budget_tokens:
                 break
         return out
+
+
+def _numbered(source: str, first_line: int) -> str:
+    """``source`` with each line prefixed by its line number in the file (``61| ...``).
+
+    Without them a model citing a method inside a class works the lines out itself,
+    and gets them wrong.
+    """
+    lines = source.splitlines()
+    width = len(str(first_line + len(lines) - 1))
+    return "\n".join(f"{n:>{width}}| {line}" for n, line in enumerate(lines, first_line))
 
 
 def _cut(text: str, max_chars: int, focus: str | None) -> str:

@@ -3517,20 +3517,34 @@
             }
         }
 
+        // Several repos can be served at once (ports 8765+), and every GitHub Pages site of one
+        // user shares an origin, so only a server for this site's repo will do. The page's own
+        // origin (opened from `codewiki serve`) always is; older servers that don't say are trusted.
+        function chatServerIsOurs(found) {
+            if (found.base === location.origin) return true;
+            const norm = function(u) { return String(u).toLowerCase().replace(/(\.git)?\/*$/, ''); };
+            const h = found.health;
+            if (CONFIG.repository_url && h.repository_url) return norm(h.repository_url) === norm(CONFIG.repository_url);
+            if (CHAT_CONFIG.repo && h.repo) return h.repo === CHAT_CONFIG.repo;
+            return true;
+        }
+
+        let chatOtherRepos = [];  // servers found for other repos, named in the offline message
+
         async function findChatServer(sameOriginOnly) {
             if (chatServer) return chatServer;
             const bases = chatCandidates().filter(function(b) {
                 return !sameOriginOnly || b === location.origin;
             });
-            for (const base of bases) {
-                const found = await probeChatServer(base);
-                if (found) {
-                    chatServer = found;
-                    renderChatFreshness();
-                    return found;
-                }
+            const found = (await Promise.all(bases.map(probeChatServer))).filter(Boolean);
+            const ours = found.find(chatServerIsOurs);
+            chatOtherRepos = found.filter(function(f) { return f !== ours; })
+                .map(function(f) { return f.health.repo + ' (' + f.base.replace(/^https?:\/\//, '') + ')'; });
+            if (ours) {
+                chatServer = ours;
+                renderChatFreshness();
             }
-            return null;
+            return ours || null;
         }
 
         function renderChatFreshness() {
@@ -3858,6 +3872,10 @@
             box.innerHTML = '<div class="chat-offline">' +
                 '<p><strong>Chat needs CodeWiki running on your machine.</strong> In your checkout of ' +
                 'this repository, run:</p><pre><code>' + escapeHtml(cmd) + '</code></pre>' +
+                (chatOtherRepos.length
+                    ? '<p>Running now, but for other repositories: ' +
+                      escapeHtml(chatOtherRepos.join(', ')) + '.</p>'
+                    : '') +
                 '<p>Then reopen this panel. Questions are answered with your own CodeWiki ' +
                 'configuration; no key is stored in this page.</p>' +
                 (safari && location.protocol === 'https:'

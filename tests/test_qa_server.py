@@ -205,6 +205,100 @@ def test_generated_site_has_the_chat_window(tmp_path):
     assert "dompurify@3.2.4" in html and "DOMPurify.sanitize" in html
     config = html.split("const CONFIG = ", 1)[1].split(";\n", 1)[0]
     data = json.loads(config)
-    assert data["chat"]["endpoints"] == ["http://127.0.0.1:8765"]
+    # Every port `codewiki serve` may pick, and the repo the site must match.
+    assert data["chat"]["endpoints"] == [f"http://127.0.0.1:{p}" for p in range(8765, 8775)]
+    assert data["chat"]["repo"] == "demo"
     assert data["repository_url"] == "https://github.com/acme/repo"
     assert data["commit_id"] == "abc123"
+
+
+# ---------------------------------------------------------------- several repos at once
+
+
+def test_health_names_the_repository(tmp_path, monkeypatch):
+    import codewiki.src.be.qa.server as server
+
+    monkeypatch.setattr(
+        server, "repository_info", lambda d: {"url": "https://github.com/acme/repo"}
+    )
+    _, docs_dir = build(tmp_path)
+    data = TestClient(create_app(str(docs_dir), set())).get("/api/health").json()
+    # The docs site connects only to the server whose repository_url matches its own.
+    assert data["repository_url"] == "https://github.com/acme/repo"
+
+
+def _listening(port):
+    import socket
+
+    s = socket.socket()
+    s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    s.bind(("127.0.0.1", port))
+    s.listen()
+    return s
+
+
+def test_free_port_skips_listening_ports_but_not_just_freed_ones():
+    import os
+    import socket
+    import time
+
+    from codewiki.src.be.qa.server import find_free_port
+
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        base = probe.getsockname()[1]
+    busy = _listening(base)
+    try:
+        assert find_free_port("127.0.0.1", base, 1) is None
+        assert find_free_port("127.0.0.1", base, 3) == base + 1
+        # Leave the port in TIME_WAIT, as a just-stopped `codewiki serve` does.
+        client = socket.create_connection(("127.0.0.1", base))
+        conn, _ = busy.accept()
+        conn.close()
+        client.close()
+    finally:
+        busy.close()
+    time.sleep(0.1)
+    if os.name != "nt":
+        assert find_free_port("127.0.0.1", base, 1) == base  # restartable right away
+
+
+def test_serve_takes_the_next_free_port_and_says_so(tmp_path, monkeypatch):
+    from click.testing import CliRunner
+
+    import codewiki.src.be.qa.server as server
+    from codewiki.cli.commands.serve import serve_command
+
+    _, docs_dir = build(tmp_path)
+    used = {}
+    monkeypatch.setattr(server, "serve", lambda docs, host, port, *a, **k: used.update(port=port))
+    monkeypatch.setattr(server, "find_free_port", lambda host, start, count: start + 1)
+    result = CliRunner().invoke(serve_command, ["--docs", str(docs_dir)])
+    assert result.exit_code == 0, result.output
+    assert used["port"] == 8766
+    assert "Port 8765 is in use" in result.output
+    assert "http://127.0.0.1:8766/" in result.output
+
+
+def test_serve_refuses_a_busy_explicit_port_before_indexing(tmp_path, monkeypatch):
+    from click.testing import CliRunner
+
+    import codewiki.src.be.qa as qa
+    import codewiki.src.be.qa.server as server
+    from codewiki.cli.commands.serve import serve_command
+
+    _, docs_dir = build(tmp_path)
+    monkeypatch.setattr(server, "find_free_port", lambda host, start, count: None)
+    monkeypatch.setattr(qa, "get_index", lambda d: pytest.fail("indexed before the port check"))
+    result = CliRunner().invoke(serve_command, ["--docs", str(docs_dir), "--port", "9123"])
+    assert result.exit_code != 0
+    assert "Port 9123 is in use" in result.output
+
+
+def test_missing_graph_is_rebuilt_from_the_repo(tmp_path):
+    import shutil
+
+    _, docs_dir = build(tmp_path)
+    shutil.rmtree(docs_dir / "temp")  # a fresh clone: docs/temp/ is git-ignored
+    index = QAIndex(str(docs_dir))
+    assert index.code, "code search is off without a graph"

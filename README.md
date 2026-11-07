@@ -178,6 +178,10 @@ configuration in CodeWiki.
 └── index.html                   # viewer (with --github-pages)
 ```
 
+Commit all of it, `temp/` included: the saved graph lets `--update` on other
+branches and machines reuse the docs. See
+[incremental updates](guides/incremental-updates.md#what-to-commit).
+
 Pages mirror the module tree: a module's page sits next to the folder holding
 its sub-modules (`auth.md`, `auth/login.md`). `--flat` puts every page in
 `./docs` instead, which helps small models that get relative links wrong.

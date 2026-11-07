@@ -186,10 +186,16 @@ class QAIndex:
         self._unit_ids: list[str] = []
         self.bm25 = BM25F(FIELD_WEIGHTS)
 
-        graph = self._load_graph()
+        graph_dir = os.path.join(self.docs_dir, "temp", "dependency_graphs")
+        graph = self._load_graph(graph_dir)
         self.repo_path = _resolve_repo(
             self.docs_dir, repo_path, {n.relative_path for n in graph.values() if n.relative_path}
         )
+        # docs/temp/ is git-ignored, so a fresh clone has no graph: parse the repo (no LLM).
+        if not graph and self._rebuild_graph(graph_dir):
+            graph = self._load_graph(graph_dir)
+        if not graph:
+            logger.warning("No dependency graph under %s/temp; code search is off", self.docs_dir)
         logger.info("Checking what changed since the docs were generated…")
         self.freshness: Freshness = detect(
             self.docs_dir, self.repo_path, {n.relative_path for n in graph.values()}
@@ -202,18 +208,44 @@ class QAIndex:
 
     # -- loading -------------------------------------------------------
 
-    def _load_graph(self) -> dict[str, Any]:
+    def _load_graph(self, graph_dir: str) -> dict[str, Any]:
         from codewiki.src.be.updater.graph_store import find_any_graph_file, load_graph
 
-        path = find_any_graph_file(os.path.join(self.docs_dir, "temp", "dependency_graphs"))
+        path = find_any_graph_file(graph_dir)
         if not path:
-            logger.warning("No dependency graph under %s/temp; code search is off", self.docs_dir)
             return {}
         try:
             return load_graph(path)
         except (OSError, ValueError, TypeError) as e:
             logger.warning("Could not load dependency graph %s: %s", path, e)
             return {}
+
+    def _rebuild_graph(self, graph_dir: str) -> str | None:
+        """Parse the repo into ``graph_dir`` (no LLM); return the graph's path or None."""
+        if not self.repo_path or not os.path.isdir(self.repo_path):
+            return None
+        from codewiki.src.be.dependency_analyzer import DependencyGraphBuilder
+        from codewiki.src.be.updater.graph_store import find_any_graph_file
+        from codewiki.src.config import Config
+
+        logger.info("Building the code index (first run in this checkout)…")
+        try:
+            config = Config(
+                repo_path=self.repo_path,
+                output_dir=os.path.dirname(graph_dir),
+                dependency_graph_dir=graph_dir,
+                docs_dir=self.docs_dir,
+                max_depth=2,
+                llm_base_url="not-needed",
+                llm_api_key="not-needed",
+                main_model="unused",
+                cluster_model="unused",
+            )
+            DependencyGraphBuilder(config).build_dependency_graph()
+        except Exception as e:  # noqa: BLE001 — chat still works from the docs
+            logger.warning("Could not build the code index: %s", e)
+            return None
+        return find_any_graph_file(graph_dir)
 
     def _build_code(self, graph: dict[str, Any]) -> None:
         live: dict[str, Any] = {}

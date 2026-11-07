@@ -334,3 +334,27 @@ def test_markdown_diagrams_keep_angle_brackets_and_run_no_html(page):
     assert "Map<String, List<Integer>>" in text
     assert "Read & write" in text
     assert not probe_ran  # HTML inside a diagram is shown as text, never executed
+
+
+# Which `codewiki serve` the site's chat may use when several repos are served (ports 8765+)
+# and every GitHub Pages site of one user shares an origin.
+OURS = """([url, health, base]) => {
+    CONFIG.repository_url = url;
+    return chatServerIsOurs({ base: base || 'http://127.0.0.1:8766', health: health });
+}"""
+
+
+def test_chat_only_uses_the_server_for_its_own_repo(page):
+    gh = "https://github.com/acme/demo"
+    cases = [
+        ([gh, {"repo": "demo", "repository_url": gh + ".git"}], True),  # .git/case don't matter
+        ([gh, {"repo": "demo", "repository_url": "https://github.com/acme/other"}], False),
+        ([None, {"repo": "other", "repository_url": None}], False),  # no remote: compare names
+        ([None, {"repo": "demo"}], True),
+        ([gh, {"repo": "other"}], False),  # older server without repository_url
+        ([gh, {"repo": "other", "repository_url": gh}, "SAME"], True),
+    ]
+    for args, expected in cases:
+        if len(args) == 3:
+            args[2] = page.evaluate("location.origin")  # opened from that server itself
+        assert page.evaluate(OURS, args) is expected, args

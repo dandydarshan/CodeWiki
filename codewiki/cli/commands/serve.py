@@ -8,7 +8,7 @@ import time
 
 import click
 
-from codewiki.src.config import DEFAULT_QA_PORT
+from codewiki.src.config import DEFAULT_QA_PORT, QA_PORT_COUNT
 
 
 @click.command(name="serve")
@@ -18,7 +18,13 @@ from codewiki.src.config import DEFAULT_QA_PORT
     default=None,
     help="Generated docs folder (default: $CODEWIKI_DOCS_DIR, else ./docs)",
 )
-@click.option("--port", type=int, default=DEFAULT_QA_PORT, show_default=True)
+@click.option(
+    "--port",
+    type=int,
+    default=None,
+    help=f"Port to listen on (default: the first free one of {DEFAULT_QA_PORT}-"
+    f"{DEFAULT_QA_PORT + QA_PORT_COUNT - 1}, where the docs site looks for it)",
+)
 @click.option(
     "--host",
     default="127.0.0.1",
@@ -36,13 +42,37 @@ from codewiki.src.config import DEFAULT_QA_PORT
 def serve_command(docs_dir, port, host, allow_origins, model, no_log_questions):
     """Serve the docs site with a local "Ask AI" chat over the docs and code.
 
-    Open http://127.0.0.1:8765, or keep using the GitHub Pages site: its chat
-    window finds this server on your machine. Answers use your CodeWiki
-    config (`codewiki config set`); nothing leaves your machine except the
-    LLM calls themselves.
+    Open the printed URL, or keep using the GitHub Pages site: its chat
+    window finds this repo's server on your machine, even with several repos
+    served at once. Answers use your CodeWiki config (`codewiki config set`);
+    nothing leaves your machine except the LLM calls themselves.
     """
     from codewiki.src.be.qa import DocsNotFoundError, get_index, resolve_docs_dir
-    from codewiki.src.be.qa.server import default_origins, origin_of, serve
+    from codewiki.src.be.qa.server import default_origins, find_free_port, origin_of, serve
+
+    # Pick the port before indexing, so a busy port fails fast and the printed URL is right.
+    last = DEFAULT_QA_PORT + QA_PORT_COUNT - 1
+    if port is None:
+        port = find_free_port(host, DEFAULT_QA_PORT, QA_PORT_COUNT)
+        if port is None:
+            raise click.ClickException(
+                f"Ports {DEFAULT_QA_PORT}-{last} are all in use (other codewiki serve "
+                "processes?). Stop one, or choose a port with --port."
+            )
+        if port != DEFAULT_QA_PORT:
+            click.echo(f"Port {DEFAULT_QA_PORT} is in use (another codewiki serve?); using {port}.")
+    elif find_free_port(host, port, 1) is None:
+        raise click.ClickException(
+            f"Port {port} is in use. Stop the process using it, or leave out --port to use a "
+            f"free one of {DEFAULT_QA_PORT}-{last}."
+        )
+    elif not DEFAULT_QA_PORT <= port <= last:
+        click.secho(
+            f"Note: the GitHub Pages site looks for ports {DEFAULT_QA_PORT}-{last}; on port "
+            f"{port} only the site served here ({host}:{port}) has chat.",
+            fg="yellow",
+            err=True,
+        )
 
     try:
         docs = resolve_docs_dir(docs_dir)

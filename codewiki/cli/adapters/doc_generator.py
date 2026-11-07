@@ -34,6 +34,30 @@ def _generated_files(working_dir: str) -> list[str]:
     return pages + jsons
 
 
+def _committed_and_clean(path: Path) -> bool:
+    """True when git tracks files under ``path`` and none of them (nor untracked ones) changed."""
+    import subprocess
+
+    def git(*args: str) -> str | None:
+        try:
+            out = subprocess.run(
+                ["git", "-C", str(path), *args],
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+        except (OSError, subprocess.SubprocessError):
+            return None
+        return out.stdout if out.returncode == 0 else None
+
+    top = git("rev-parse", "--show-toplevel")
+    if not top or Path(top.strip()).resolve() == path.resolve():
+        return False  # docs written into the repo root: never delete that
+    tracked = git("ls-files", "--", ".")
+    status = git("status", "--porcelain", "--untracked-files=all", "--", ".")
+    return bool(tracked and tracked.strip()) and status is not None and not status.strip()
+
+
 def _module_file_count(module_info: dict) -> int:
     """Distinct source files in a module and its sub-modules.
 
@@ -224,6 +248,16 @@ class CLIDocumentationGenerator:
             self.job.fail(str(e))
             raise
 
+    def _docs_commit(self) -> str | None:
+        """The commit the existing docs were generated from (metadata.json), if known."""
+        import json
+
+        try:
+            with open(self.output_dir / "metadata.json", encoding="utf-8") as f:
+                return (json.load(f).get("generation_info") or {}).get("commit_id")
+        except (OSError, json.JSONDecodeError, AttributeError):
+            return None
+
     async def _run_backend_generation(self, backend_config: BackendConfig):
         """Run the backend documentation generation with progress tracking."""
 
@@ -242,11 +276,27 @@ class CLIDocumentationGenerator:
         update_opts = self._update_options()
         prev_graph_path = None
         if update_opts is not None:
-            from codewiki.src.be.updater.graph_store import snapshot_old_graph
+            from codewiki.src.be.updater.graph_store import (
+                rebuild_graph_at_commit,
+                snapshot_old_graph,
+            )
+
+            # Decide before anything below writes into docs/: if they are committed and
+            # unmodified now, git holds exactly them, so a full build needs no backup copy.
+            self._docs_clean_at_start = _committed_and_clean(self.output_dir)
 
             prev_graph_path = snapshot_old_graph(
                 backend_config.dependency_graph_dir, str(self.repo_path)
             )
+            # docs/temp/ is git-ignored, so a fresh clone has no previous graph: rebuild it
+            # from the docs' commit (no LLM) instead of falling back to a full rebuild.
+            docs_commit = self._docs_commit()
+            if prev_graph_path is None and docs_commit:
+                if self.verbose:
+                    self.progress_tracker.update_stage(
+                        0.1, "Rebuilding the previous dependency graph from the docs commit..."
+                    )
+                prev_graph_path = rebuild_graph_at_commit(backend_config, docs_commit)
 
         if self.verbose:
             self.progress_tracker.update_stage(0.5, "Parsing source files...")
@@ -469,14 +519,8 @@ class CLIDocumentationGenerator:
         from codewiki.src.be.updater.orchestrator import IncrementalUpdater
 
         self.progress_tracker.start_stage(2, "Incremental Update")
-        prev_commit = None
-        try:
-            with open(self.output_dir / "metadata.json", encoding="utf-8") as f:
-                prev_commit = (json.load(f).get("generation_info") or {}).get("commit_id")
-        except (OSError, json.JSONDecodeError, AttributeError):
-            pass
         revision = {
-            "old_commit": prev_commit,
+            "old_commit": self._docs_commit(),
             "new_commit": self.commit_id,
             "repo_path": str(self.repo_path),
         }
@@ -485,6 +529,10 @@ class CLIDocumentationGenerator:
         )
         with doc_generator.usage_ledger.in_phase("update"):
             record = await updater.run(prev_graph_path, components, leaf_nodes, revision)
+        # The diff is done (or a full build follows), so drop the scratch copy: left in
+        # docs/temp it doubled what gets committed (35 MB of a user's 85 MB docs folder).
+        if prev_graph_path and os.path.exists(prev_graph_path):
+            os.remove(prev_graph_path)
         self._last_update_record = record
         summary = record.summary()
         if self.verbose:
@@ -517,23 +565,38 @@ class CLIDocumentationGenerator:
         return record.outcome
 
     def _move_docs_aside(self) -> None:
-        """Keep the previous docs (and the failed attempt's record) next to the output dir."""
+        """Clear the output dir for a full rebuild, keeping the previous docs recoverable.
+
+        Docs that were committed and unmodified when the update started are safe in git
+        (the update itself has written into docs/ by now), so nothing is copied. Otherwise
+        the docs move to ``<docs>.prev-<commit>`` next to the output dir: git-ignored (it
+        sits outside docs/, where `git add .` would pick up a full copy of the docs) and
+        only the latest such copy is kept.
+        """
         import shutil
 
-        suffix = (self.commit_id or "unknown")[:8]
-        target = self.output_dir.parent / f"{self.output_dir.name}.prev-{suffix}"
-        n = 2
-        while target.exists():
-            target = self.output_dir.parent / f"{self.output_dir.name}.prev-{suffix}-{n}"
-            n += 1
-        shutil.move(str(self.output_dir), str(target))
-        self.output_dir.mkdir(parents=True, exist_ok=True)
-        self._preserved_docs_dir = str(target)
         record = getattr(self, "_last_update_record", None)
+        name = self.output_dir.name
+        if getattr(self, "_docs_clean_at_start", False):
+            shutil.rmtree(self.output_dir)
+            self.output_dir.mkdir(parents=True, exist_ok=True)
+            note = f"previous docs are in git; restore them with: git restore --source=HEAD {name}/"
+        else:
+            for old in self.output_dir.parent.glob(f"{name}.prev-*"):
+                if old.is_dir():
+                    shutil.rmtree(old, ignore_errors=True)
+            target = self.output_dir.parent / f"{name}.prev-{(self.commit_id or 'unknown')[:8]}"
+            shutil.move(str(self.output_dir), str(target))
+            (target / ".gitignore").write_text(
+                "# CodeWiki backup of the previous docs. Do not commit; delete when done.\n*\n",
+                encoding="utf-8",
+            )
+            self.output_dir.mkdir(parents=True, exist_ok=True)
+            self._preserved_docs_dir = str(target)
+            note = f"previous docs moved to {target} (not committed; delete it when done)"
         if record is not None:
-            record.detector_notes.append(f"previous docs moved to {target}")
-        if self.verbose:
-            self.progress_tracker.update_stage(0.1, f"Previous docs preserved at {target}")
+            record.detector_notes.append(note)
+        self.progress_tracker.note(f"Full rebuild: {note}")
 
     @staticmethod
     def _read_update_history(working_dir: str) -> list:

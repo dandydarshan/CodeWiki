@@ -120,6 +120,14 @@ class SessionStore:
         with self._lock:
             return self._sessions.pop(session_id, None) is not None
 
+    def close_all(self) -> None:
+        """Drop every session and its on-disk workspace (the server is shutting down)."""
+        with self._lock:
+            for state in self._sessions.values():
+                if state.workspace is not None:
+                    state.workspace.cleanup()
+            self._sessions.clear()
+
     def _purge_expired_locked(self) -> None:
         """Remove all expired sessions.  Caller must hold _lock."""
         expired = [sid for sid, s in self._sessions.items() if s.is_expired]

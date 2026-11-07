@@ -850,12 +850,16 @@ def _write_generation_metadata(session: SessionState) -> None:
 
 async def main():
     """Run the MCP server with stdio transport."""
-    async with stdio_server() as (read_stream, write_stream):
-        await server.run(
-            read_stream,
-            write_stream,
-            server.create_initialization_options(),
-        )
+    try:
+        async with stdio_server() as (read_stream, write_stream):
+            await server.run(
+                read_stream,
+                write_stream,
+                server.create_initialization_options(),
+            )
+    finally:
+        # The IDE closed the connection: remove this server's workspaces from the user's repo.
+        _store.close_all()
 
 
 if __name__ == "__main__":

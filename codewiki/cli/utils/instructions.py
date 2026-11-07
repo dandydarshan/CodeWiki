@@ -152,6 +152,10 @@ def display_post_generation_instructions(
     click.echo(f"   cat {output_dir}/overview.md")
     if github_pages:
         click.echo(f"   open {output_dir}/index.html  # View in browser")
+    click.echo(
+        f"   Commit all of {output_dir.name}/, including {output_dir.name}/temp/dependency_graphs: "
+        "it lets `--update` on other branches and machines reuse these docs."
+    )
     click.echo()
 
     if branch_name:

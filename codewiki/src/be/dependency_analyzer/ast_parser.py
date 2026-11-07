@@ -1,10 +1,10 @@
-import json
 import logging
 import os
 from typing import TYPE_CHECKING
 
 from codewiki.src.be.dependency_analyzer.analysis.analysis_service import AnalysisService
 from codewiki.src.be.dependency_analyzer.models.core import Node
+from codewiki.src.utils import file_manager
 
 if TYPE_CHECKING:  # pragma: no cover
     from codewiki.src.be.dependency_analyzer.analyzers.artifact import ArtifactOptions
@@ -204,14 +204,18 @@ class DependencyParser:
             component_dict = component.model_dump()
             if "depends_on" in component_dict and isinstance(component_dict["depends_on"], set):
                 component_dict["depends_on"] = list(component_dict["depends_on"])
+            # The saved graph is committed with the docs: an absolute path would publish the
+            # checkout's location (e.g. C:/Users/<name>/...). Nothing reads file_path back from disk.
+            if component_dict.get("relative_path"):
+                component_dict["file_path"] = component_dict["relative_path"]
             result[component_id] = component_dict
 
         dir_name = os.path.dirname(output_path)
         if dir_name:
             os.makedirs(dir_name, exist_ok=True)
 
-        with open(output_path, "w", encoding="utf-8") as f:
-            json.dump(result, f, indent=2, ensure_ascii=False)
+        # Atomic: several processes (two IDEs' MCP servers, serve, generate) may share this file.
+        file_manager.save_json(result, output_path, indent=2)
 
         logger.debug(f"Saved {len(self.components)} components to {output_path}")
         return result

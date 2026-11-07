@@ -3530,6 +3530,18 @@
         }
 
         let chatOtherRepos = [];  // servers found for other repos, named in the offline message
+        let chatAccessDenied = false;  // the browser blocks this site from reaching localhost
+
+        // Chrome asks before a public site (GitHub Pages) may reach this machine; once denied,
+        // every probe fails exactly as if `codewiki serve` were not running.
+        async function localNetworkAccessDenied() {
+            try {
+                const status = await navigator.permissions.query({ name: 'local-network-access' });
+                return status.state === 'denied';
+            } catch (e) {
+                return false;  // browser without this permission
+            }
+        }
 
         async function findChatServer(sameOriginOnly) {
             if (chatServer) return chatServer;
@@ -3544,6 +3556,7 @@
                 chatServer = ours;
                 renderChatFreshness();
             }
+            chatAccessDenied = !ours && !found.length && await localNetworkAccessDenied();
             return ours || null;
         }
 
@@ -3870,8 +3883,14 @@
                 (port !== '8765' ? ' --port ' + port : '');
             const safari = /^((?!chrome|android).)*safari/i.test(navigator.userAgent);
             box.innerHTML = '<div class="chat-offline">' +
-                '<p><strong>Chat needs CodeWiki running on your machine.</strong> In your checkout of ' +
-                'this repository, run:</p><pre><code>' + escapeHtml(cmd) + '</code></pre>' +
+                (chatAccessDenied
+                    ? '<p><strong>Your browser is blocking this page from reaching CodeWiki on your ' +
+                      'machine.</strong> To allow it, click the icon left of the address bar, turn on ' +
+                      '<em>Local network access</em> for this site, and reopen this panel.</p>' +
+                      '<p>If CodeWiki is not running yet, in your checkout of this repository run:</p>'
+                    : '<p><strong>Chat needs CodeWiki running on your machine.</strong> In your checkout of ' +
+                      'this repository, run:</p>') +
+                '<pre><code>' + escapeHtml(cmd) + '</code></pre>' +
                 (chatOtherRepos.length
                     ? '<p>Running now, but for other repositories: ' +
                       escapeHtml(chatOtherRepos.join(', ')) + '.</p>'

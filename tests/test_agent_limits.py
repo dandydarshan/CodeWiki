@@ -52,7 +52,7 @@ def test_fallback_covers_malformed_responses(monkeypatch):
 
     captured = {}
     monkeypatch.setattr(
-        llm_services, "create_main_model", lambda config: FunctionModel(lambda m, i: None)
+        llm_services, "create_main_model", lambda config, **_: FunctionModel(lambda m, i: None)
     )
     monkeypatch.setattr(
         llm_services, "create_fallback_model", lambda config: FunctionModel(lambda m, i: None)

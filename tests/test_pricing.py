@@ -267,7 +267,7 @@ def test_fallback_attribution_and_unknown_usage(tmp_path, monkeypatch):
         raise ModelHTTPError(503, "main", "failed")
 
     monkeypatch.setattr(
-        llm_services, "create_main_model", lambda c: FunctionModel(fail, model_name="main")
+        llm_services, "create_main_model", lambda c, **_: FunctionModel(fail, model_name="main")
     )
     monkeypatch.setattr(
         llm_services,

@@ -33,6 +33,8 @@ def ask_command(
       codewiki ask "where is the signature verified?"
       codewiki ask "what breaks if I remove max_age from TimestampSigner.unsign?"
     """
+    if not as_json:  # before the imports and index below, which take seconds on some machines
+        click.secho("… Loading the docs and code…", fg="bright_black", err=True)
     from codewiki.src.be.qa import DocsNotFoundError, get_engine
 
     text = " ".join(question).strip()

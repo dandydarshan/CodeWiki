@@ -6,6 +6,124 @@ uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [2.1.0] - 2026-11-07
+
+### Added
+
+- **Ask AI.** `codewiki serve` serves the docs site with a chat window that
+  answers questions from the docs and the current code, with citations to doc
+  sections and source lines. The GitHub Pages viewer's chat finds a
+  `codewiki serve` running for that repository on your machine (ports
+  8765–8774, several repositories at once). The chat can copy, edit, retry
+  and stop answers, shows progress, renders Mermaid, and can be minimised and
+  resized. See [Ask AI](./guides/ask-ai.md).
+- **`codewiki ask`** answers in the terminal, with `--session` follow-ups,
+  `--json` output and a footer of calls, tokens, cache hits and cost.
+- **MCP question tools** over generated docs: `codewiki_outline`,
+  `codewiki_status`, `codewiki_search`, `codewiki_read` and `codewiki_impact`
+  (no LLM), and `codewiki_ask`.
+- **Concurrent module agents** (`--concurrency`, default 4; sub-modules share
+  the slots), with live progress, an ETA and a run summary.
+- **Context-window-aware prompts** (`--max-context-tokens`, or learned from an
+  OpenAI-compatible provider's context-length error). Module, clustering and
+  overview prompts are sized to the window, and agent history is trimmed to
+  it, Gemini included.
+- **Page summaries.** Each module page ends with a hidden
+  `<!-- codewiki:summary ... -->` comment. Parent overviews fall back to these
+  summaries, plus each child's outline, when the child pages do not fit.
+- **Cost reporting.** Every LLM call's tokens and cost are recorded in
+  `metadata.json`, priced with `codewiki config pricing set/show/remove`.
+- `--main-model`, `--cluster-model` and `--fallback-model` on `generate`.
+- `--min-token-per-module` (default 1,000): small groups merge into a nearby
+  sibling instead of becoming a page of their own.
+- `generate` says which branch and which files it documents, and asks first
+  when that looks unintended (`-y` skips the question).
+- Generated docs files are marked `linguist-generated`, so pull requests
+  collapse them.
+- A by-hand, real-model release check for Linux, Windows and macOS
+  (`packaging/release_check/`).
+
+### Changed
+
+- **Nothing is dropped silently on large repositories.**
+  - A module's prompt lists components only for its neighbourhood (parent,
+    siblings, children, and the modules its code uses or is used by), instead
+    of every component in the repository. On one user's repository that list
+    alone was 2M of a 2.2M-character prompt.
+  - A module too big for one prompt may split up to two levels past
+    `--max-depth`. If it still does not fit, whole files are inlined while
+    they fit and the rest are listed for the agent to read in full; files are
+    no longer cut off.
+- **`--no-cache` rebuilds from scratch.** It was accepted but did nothing, so
+  runs resumed. The old docs stay recoverable: `git restore` if committed,
+  else a `<docs>.prev-<commit>` copy. It cannot be combined with `--update`.
+- **Overview pages are written in one bounded completion** from the child
+  pages, validated (a heading and real prose, not a plan to read files) and
+  corrected once if needed; the previous page is kept if it still fails.
+- **Agents must write their page.** One that ends without writing it is
+  reminded, then fails explicitly instead of leaving the page missing.
+- **Mermaid validation never leaves your machine.** It runs in PythonMonkey
+  on the main thread, else system Node.js, and is reported as unavailable
+  otherwise; diagrams are never sent to mermaid.ink. Invalid flowchart labels
+  are repaired before a page is saved.
+- **Smaller, branch-reusable docs folder.** The dependency graph is no longer
+  kept as a scratch copy (it was half of one user's 85 MB docs folder) and is
+  rebuilt from the docs' commit when needed, so docs generated on one branch
+  update on another. Several repositories can be served at once.
+- `--update` backs up uncommitted docs before editing them, and never clears
+  a repository root.
+- The docs no longer publish the checkout's absolute path.
+- The CLI starts in 0.08 s (`codewiki --version`), and `serve`, `ask` and
+  `config validate` say what they are doing before slow steps.
+  `config validate` fails fast and says why.
+- `config show --json` reports `"api_key_storage": "file"` instead of
+  `"encrypted_file"`: the fallback credentials file is plain JSON with
+  owner-only permissions, not encrypted, and every message now says so.
+- tree-sitter 0.26.
+
+### Fixed
+
+- Ask AI cited the wrong source lines: code is now read with its line numbers.
+- An empty `old_str` in the editor crashed the agent and failed its module.
+- A failed agent's half-written page counted as done on resume, so the module
+  was never retried.
+- A path that started with the docs folder's own name created a nested
+  `docs/docs/` page.
+- Ask AI stats counted cached prompt tokens twice.
+- Streamed completions reported the requested model instead of the one that
+  answered, so cost was priced on the wrong model.
+- Windows: Go, Zig and Vue component ids used `\`; MCP doc edits never matched
+  after the first write (`\n` saved as `\r\n`); UTF-8 pages could be read
+  as cp1252 and saved garbled; Ask AI survives files named `NUL`.
+- Rejected tool calls are reported again with pydantic-ai 2.x.
+- Overview generation blocked other agents while it waited for the model.
+- CodeWiki's own output in the docs folder is no longer analysed as code.
+- Tool-call text no longer leaks into published parent pages.
+- Viewer: diagram labels are no longer cut off; the Ask AI drawer is
+  resizable.
+- C and C++ functions returning pointers or references, and a macro before
+  the name of a `(void)` function, are kept in the graph. Constructors are
+  components like any method.
+- Analyzers no longer swallow the per-file parse timeout. Doc-comment edits
+  count as component changes in `--update`.
+- Module clustering size estimates and source-file coverage; every file now
+  belongs to exactly one module, and a run fails if one is left out.
+- Dart: `*.config.dart` is no longer ignored, exact names match before short
+  ones, and name matching works without a `pubspec.yaml`.
+- Google: the Gemini fallback model resets when switching provider, and the
+  client stays alive during checks.
+- mermaid-py's "IPython is not installed" notice no longer reaches the
+  terminal.
+
+### Security
+
+- **XSS in the docs viewer** through Mermaid blocks is fixed; angle brackets
+  in labels are kept as text.
+- Vulnerable dependencies were bumped, and CI scans dependencies (pip-audit),
+  workflows (zizmor) and code (Bandit rules, through ruff) on every pull request,
+  with Dependabot updates.
+- The credentials file's storage is described accurately (see Changed).
+
 ## [2.0.2] - 2026-10-11
 
 ### Fixed

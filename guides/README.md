@@ -4,15 +4,16 @@
 
 # Guides
 
-Hand-written guides for CodeWiki 2.0. The `docs/` folder next to this one is
+Hand-written guides for CodeWiki 2.1. The `docs/` folder next to this one is
 CodeWiki's own generated documentation and is not edited by hand.
 
 | Guide | Read it when you want to |
 | --- | --- |
-| [CLI reference](cli-reference.md) | Look up any `codewiki generate` or `codewiki config` flag |
+| [CLI reference](cli-reference.md) | Look up any `codewiki` command or flag |
 | [Providers and models](providers.md) | Connect an API key, Atlas Cloud, Azure, Bedrock, or run on a Claude / Codex subscription |
 | [Artifact-aware generation](artifact-aware-generation.md) | Understand how build, CI, container, and config files get documented, and how to tune or turn it off |
 | [Incremental updates](incremental-updates.md) | Keep documentation current with `--update` and understand what it will and will not touch |
+| [Ask AI](ask-ai.md) | Ask questions about the code: the docs site's chat (`codewiki serve`), `codewiki ask`, and the MCP question tools |
 | [MCP / IDE-driven mode](mcp-ide-mode.md) | Run CodeWiki as an MCP server inside Cursor, Claude Desktop, Claude Code, or CodeBuddy, with no LLM configuration |
 | [Backstage TechDocs](backstage-techdocs.md) | Publish the generated docs in Backstage with `--techdocs` or `codewiki techdocs` |
 | [Development guide](development.md) | Change CodeWiki: project layout, pipeline, adding a language, tests, releasing |

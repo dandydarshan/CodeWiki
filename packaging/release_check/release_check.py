@@ -167,7 +167,7 @@ def choose_install_source(args) -> str:
     print("  2) Local wheel file or folder (pre-publish check)")
     choice = ask("Choose [1/2]: ")
     if choice == "1":
-        spec = ask(f"Package spec [{PACKAGE}] (e.g. {PACKAGE}==2.0.2): ")
+        spec = ask(f"Package spec [{PACKAGE}] (e.g. {PACKAGE}==2.1.0): ")
         return spec or PACKAGE
     if choice == "2":
         return str(resolve_wheel(Path(ask("Path to .whl file or folder: "))))
@@ -291,7 +291,7 @@ def main() -> int:
     p.add_argument("--repo", required=True, help="git URL (or local path) of the repo to document")
     p.add_argument("--config", required=True, type=Path, help="key = value config file")
     src = p.add_mutually_exclusive_group()
-    src.add_argument("--package", help=f"PyPI spec, e.g. {PACKAGE}==2.0.2")
+    src.add_argument("--package", help=f"PyPI spec, e.g. {PACKAGE}==2.1.0")
     src.add_argument(
         "--wheel", help="local .whl file, or a folder of wheels (picks the one for this OS/Python)"
     )

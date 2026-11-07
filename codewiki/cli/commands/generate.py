@@ -297,7 +297,8 @@ def _confirm_what_is_documented(
 @click.option(
     "--no-cache",
     is_flag=True,
-    help="Force full regeneration, ignoring cache",
+    help="Rebuild from scratch: new module tree and every page. A normal run resumes, "
+    "reusing existing pages. The old docs stay recoverable (git, or <docs>.prev-<commit>).",
 )
 @click.option(
     "--include",
@@ -637,6 +638,8 @@ def generate_command(
     # Use other models for this generation
     $ codewiki generate --main-model claude-haiku-5-5 --cluster-model claude-haiku-5-5
     """
+    if update and no_cache:
+        raise click.UsageError("--no-cache rebuilds from scratch; it cannot be used with --update.")
     print_banner()
     logger = create_logger(verbose=verbose)
     start_time = time.time()
@@ -956,6 +959,7 @@ def generate_command(
                 "crosslinks_enabled": crosslinks,
                 # Incremental updater (runtime-only)
                 "update": update,
+                "no_cache": no_cache,
                 "update_options": {
                     "rung": update_rung,
                     "tau_ren": tau_ren,

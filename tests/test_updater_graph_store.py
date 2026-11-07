@@ -416,3 +416,27 @@ def test_generated_docs_files_collapse_in_pull_requests_but_pages_do_not(tmp_pat
     (repo / "docs" / ".gitattributes").write_text("*.md diff=markdown\n")  # a user's own file
     write_docs_gitattributes(str(repo / "docs"))
     assert (repo / "docs" / ".gitattributes").read_text() == "*.md diff=markdown\n"
+
+
+def test_no_cache_rebuilds_and_keeps_the_old_docs_recoverable(tmp_path):
+    repo = _repo_with_docs(tmp_path)
+    (repo / "docs" / "draft.md").write_text("# Uncommitted\n")  # not in git: backed up
+    gen = _gen_for(repo / "docs")
+    gen._start_fresh()
+    assert os.listdir(repo / "docs") == []  # nothing left for a resume to reuse
+    (backup,) = repo.glob("docs.prev-*")
+    assert (backup / "draft.md").read_text() == "# Uncommitted\n"
+
+    empty = tmp_path / "fresh"
+    empty.mkdir()
+    _gen_for(empty)._start_fresh()  # nothing to clear: no backup, no error
+    assert not list(tmp_path.glob("fresh.prev-*"))
+
+
+def test_no_cache_cannot_be_combined_with_update():
+    from click.testing import CliRunner
+
+    from codewiki.cli.commands.generate import generate_command
+
+    result = CliRunner().invoke(generate_command, ["--update", "--no-cache"])
+    assert result.exit_code != 0 and "cannot be used with --update" in result.output

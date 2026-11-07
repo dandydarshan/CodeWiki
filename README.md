@@ -11,7 +11,7 @@
 
 <p align="center">
   <a href="https://python.org/"><img alt="Python version" src="https://img.shields.io/badge/python-3.12+-blue?style=flat-square" /></a>
-  <img alt="Version" src="https://img.shields.io/badge/version-2.0.2-blue?style=flat-square" />
+  <img alt="Version" src="https://img.shields.io/badge/version-2.1.0-blue?style=flat-square" />
   <a href="./LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/License-MIT-green.svg?style=flat-square" /></a>
   <a href="https://github.com/FSoft-AI4Code/CodeWiki/actions/workflows/ci.yml"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/FSoft-AI4Code/CodeWiki/ci.yml?branch=main&style=flat-square&label=CI" /></a>
   <a href="https://aclanthology.org/2026.findings-acl.288/"><img alt="Paper: Findings of ACL 2026" src="https://img.shields.io/badge/paper-Findings%20of%20ACL%202026-b31b1b?style=flat-square" /></a>
@@ -20,7 +20,7 @@
 
 <p align="center">
   <a href="#quick-start"><strong>Quick start</strong></a> •
-  <a href="#whats-new-in-20"><strong>What's new in 2.0</strong></a> •
+  <a href="#whats-new-in-21"><strong>What's new in 2.1</strong></a> •
   <a href="#features"><strong>Features</strong></a> •
   <a href="#benchmark-results"><strong>Benchmark</strong></a> •
   <a href="./guides/README.md"><strong>Guides</strong></a> •
@@ -43,8 +43,10 @@ https://github.com/user-attachments/assets/951d5d3c-fd6e-4734-8b16-445d880f95d3
 CodeWiki reads a repository, builds its dependency graph, splits the graph into
 a hierarchy of modules, and has agents write one page per module plus an
 overview, with Mermaid diagrams. It works on codebases from a few thousand to
-over a million lines, in 11 languages. It needs an LLM API key, or a Claude or
-Codex subscription, or an AI IDE that speaks MCP.
+over a million lines, in 16 languages. Then you can ask questions about the
+code, answered from those docs and the code itself, in the docs site, the
+terminal or your IDE. It needs an LLM API key, or a Claude or Codex
+subscription, or an AI IDE that speaks MCP.
 
 ## Quick start
 
@@ -89,6 +91,39 @@ codewiki generate --techdocs          # also exports a Backstage TechDocs site t
 codewiki generate --update            # later: refresh after code changes
 ```
 
+**4. Ask**
+
+```bash
+codewiki serve                        # docs site with an "Ask AI" chat, on localhost
+codewiki ask "where is the signature verified?"
+```
+
+## What's new in 2.1
+
+Full list in the [CHANGELOG](./CHANGELOG.md).
+
+- **Ask AI.** `codewiki serve` serves the docs with a chat window that answers
+  from the docs and the code, with citations down to the line. The GitHub
+  Pages site's chat uses it too. `codewiki ask` answers in the terminal, and
+  the MCP server gains no-LLM search, read, impact and status tools for IDE
+  agents. [Guide](./guides/ask-ai.md)
+- **Concurrent agents.** Module agents run side by side (`--concurrency`,
+  default 4), with live progress and an ETA.
+- **Nothing dropped silently on large repositories.** Each prompt carries the
+  module's neighbourhood instead of the whole repository's component list.
+  A module too big for one prompt splits further, and files that still don't
+  fit are listed for the agent to read in full. Prompt budgets follow the
+  model's context window (`--max-context-tokens`, or learned from provider
+  errors). Parent pages are written from summaries each child page leaves.
+- **Cost reporting.** Every run records tokens and cost per call in
+  `metadata.json`, priced with `codewiki config pricing`.
+- **Safer docs folders.** Generation says which branch and files it documents,
+  `--update` backs up uncommitted docs first, the dependency graph is smaller
+  and reusable across branches, and generated files collapse in pull requests.
+- Also: a CLI that starts in 0.08 s, Mermaid validation that never leaves your
+  machine, an XSS fix in the docs viewer, security scanning, and many fixes
+  for Windows.
+
 ## What's new in 2.0
 
 The documentation an agent can write is bounded by what the dependency graph
@@ -131,14 +166,21 @@ module tree, recursively, so a 1.4M-line repository gets the same treatment
 as a 10k-line one. Depth and size thresholds are configurable.
 
 **Recursive agents.** One agent per leaf module reads the code through tools
-and writes the page. Parent pages are written from child pages. Diagrams are
-validated before they are saved.
+and writes the page, several at once (`--concurrency`). Parent pages are
+written from child pages. Diagrams are validated locally before they are
+saved.
+
+**Ask AI.** `codewiki serve` adds a chat to the docs site, `codewiki ask`
+answers in the terminal, and IDE agents get search, read, impact and status
+tools over MCP. Answers come from the docs and the current code, with
+citations. [Guide](./guides/ask-ai.md)
 
 **Artifacts are documented.** On by default. `--no-artifacts` gives the 1.x
 behaviour, `--with-prose` also reads README and `docs/`,
 `--artifact-exclude` skips generated configuration trees.
 
 **Incremental updates.** `--update` refreshes only what changed.
+`--no-cache` rebuilds from scratch; a plain run resumes, reusing existing pages.
 `--compare-to <commit>` sets the base commit for CI and squashed merges. If
 too much changed, it falls back to a full build and says so.
 
@@ -257,6 +299,7 @@ JavaScript, TypeScript). Artifacts lift the build and testing topics, which
 | [Providers and models](./guides/providers.md) | API keys, Atlas Cloud, Azure, Bedrock, subscription mode |
 | [Artifact-aware generation](./guides/artifact-aware-generation.md) | what gets documented beyond code, and how to tune it |
 | [Incremental updates](./guides/incremental-updates.md) | how `--update` works, thresholds, the update record |
+| [Ask AI](./guides/ask-ai.md) | `codewiki serve`, `codewiki ask`, and the MCP question tools |
 | [MCP / IDE-driven mode](./guides/mcp-ide-mode.md) | Cursor, Claude Desktop, Claude Code, CodeBuddy |
 | [Backstage TechDocs](./guides/backstage-techdocs.md) | publish the docs in a Backstage developer portal |
 | [Development guide](./guides/development.md) | layout, pipeline, adding a language, tests, releasing |

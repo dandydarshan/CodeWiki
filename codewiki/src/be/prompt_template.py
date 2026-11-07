@@ -304,9 +304,11 @@ MODULE_TREE_FOCUSED_NOTE = (
 )
 
 FILES_NOT_INLINED_NOTE = (
-    "NOTE: these files belong to this module but did not fit in this prompt. They are "
-    "part of the module: read them with `read_code_components` (component IDs below) "
-    "and document them like the inlined files.\n"
+    "NOTE: these files belong to this module but did not fit in this prompt. Document them "
+    "like the inlined files. Read each whole file with `str_replace_editor` "
+    '(`working_dir="repo"`, `command="view"`, the path below; pass `view_range` to page '
+    "through long files), or just the listed components with `read_code_components`. "
+    "Write the page as you go: older tool results may be dropped to fit your context.\n"
 )
 
 PAGE_SUMMARY_GUIDANCE = """<PAGE_SUMMARY>

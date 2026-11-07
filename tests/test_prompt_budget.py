@@ -160,3 +160,44 @@ def test_page_writing_prompts_ask_for_a_summary():
     for template in (pt.SYSTEM_PROMPT, pt.LEAF_SYSTEM_PROMPT, pt.MODULE_OVERVIEW_PROMPT):
         assert "codewiki:summary" in template
     assert "codewiki:summary" not in pt.REPO_OVERVIEW_PROMPT  # the root has no parent
+
+
+@pytest.mark.parametrize("kind", ["pydantic", "caw"])
+def test_listed_files_can_be_read_whole_as_the_note_says(tmp_path, kind):
+    import asyncio
+
+    from codewiki.src.be.agent_tools.deps import CodeWikiDeps
+
+    source = "".join(f"LINE_{i} = {i}\n" for i in range(1, 3001))  # past one 16k view
+    (tmp_path / "repo" / "m").mkdir(parents=True)
+    (tmp_path / "repo" / "m" / "big.py").write_text(source, encoding="utf-8")
+    (tmp_path / "docs").mkdir()
+    deps = CodeWikiDeps(
+        absolute_docs_path=str(tmp_path / "docs"),
+        absolute_repo_path=str(tmp_path / "repo"),
+        registry={},
+        components={},
+        path_to_current_module=["m"],
+        current_module_name="m",
+        module_tree={},
+        max_depth=2,
+        current_depth=1,
+        config=SimpleNamespace(),
+    )
+    if kind == "pydantic":
+        from codewiki.src.be.agent_tools.str_replace_editor import str_replace_editor
+
+        def view(**kw):
+            return asyncio.run(str_replace_editor(SimpleNamespace(deps=deps), **kw))
+    else:
+        from codewiki.src.be.caw_toolkit import CawToolKit
+
+        toolkit = CawToolKit(deps=deps, backend=SimpleNamespace(), allow_subagent=False)
+
+        def view(**kw):
+            return asyncio.run(toolkit.str_replace_editor(**kw))
+
+    first = view(working_dir="repo", command="view", path="m/big.py")
+    assert "LINE_1 = 1" in first and "LINE_3000" not in first  # clipped: page with view_range
+    tail = view(working_dir="repo", command="view", path="m/big.py", view_range=[2990, -1])
+    assert "LINE_3000 = 3000" in tail

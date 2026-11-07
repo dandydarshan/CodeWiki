@@ -92,6 +92,13 @@ uses [Semantic Versioning](https://semver.org/).
 - **A failed `--update` agent was reported as success.** Its pages read as
   "no-op" and the run said "generated successfully". The failure is now a run
   error, and `--update` prints a run's errors.
+- **The fallback model failed on its first request** when the primary's
+  tool-call ids had characters Bedrock rejects (Kimi-style
+  `functions.read:0`): "tool_use.id: String should match pattern". Tool-call
+  ids are now sent in a form every provider accepts.
+- A hanging primary model was retried twice (up to 600 s each) before the
+  fallback model was tried; with a different fallback model it now falls
+  back after the first timeout.
 - Ask AI cited the wrong source lines: code is now read with its line numbers.
 - An empty `old_str` in the editor crashed the agent and failed its module.
 - A failed agent's half-written page counted as done on resume, so the module

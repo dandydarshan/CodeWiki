@@ -218,3 +218,35 @@ def test_cluster_prompt_details_only_the_modules_surroundings(repo):
     assert pt.MODULE_TREE_TRIMMED_NOTE not in focused
     tight = pt.format_cluster_prompt("<components>", huge, "target", max_tokens=500)
     assert pt.MODULE_TREE_TRIMMED_NOTE in tight and "t.py: T" not in tight
+
+
+def test_empty_old_str_is_an_error_message_not_a_crash(tmp_path):
+    import asyncio
+
+    from codewiki.src.be.agent_tools.deps import CodeWikiDeps
+    from codewiki.src.be.agent_tools.str_replace_editor import str_replace_editor
+
+    (tmp_path / "page.md").write_text("", encoding="utf-8")  # created empty, then edited
+    deps = CodeWikiDeps(
+        absolute_docs_path=str(tmp_path),
+        absolute_repo_path=str(tmp_path),
+        registry={},
+        components={},
+        path_to_current_module=["m"],
+        current_module_name="m",
+        module_tree={},
+        max_depth=2,
+        current_depth=1,
+        config=SimpleNamespace(),
+    )
+    result = asyncio.run(
+        str_replace_editor(
+            SimpleNamespace(deps=deps),
+            working_dir="docs",
+            command="str_replace",
+            path="page.md",
+            old_str="",
+            new_str="# Page\n",
+        )
+    )
+    assert "old_str is empty" in result

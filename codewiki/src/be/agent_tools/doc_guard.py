@@ -16,6 +16,7 @@ from __future__ import annotations
 import logging
 import os
 from collections import Counter
+from contextlib import contextmanager
 from typing import Any
 
 from pydantic_ai.messages import (
@@ -53,6 +54,38 @@ def doc_written(
         )
     path = resolve_module_doc_path(docs_dir, module_name, module_tree)
     return path is not None and os.path.isfile(path)
+
+
+@contextmanager
+def discard_partial_page(
+    docs_dir: str, module_name: str, module_path: list[str], module_tree: dict[str, Any] | None
+):
+    """Remove the page a failed agent run left behind.
+
+    It is incomplete, and resume skips modules whose page exists, so it would never
+    be retried. Pages that existed before the run are left alone; the whole-repo
+    pages have their own guard (preserve_incomplete_overviews).
+    """
+    if not module_path:
+        yield
+        return
+    before = resolve_module_doc_path(docs_dir, module_name, module_tree)
+    existed = before is not None and os.path.isfile(before)
+    try:
+        yield
+    except BaseException:
+        path = resolve_module_doc_path(docs_dir, module_name, module_tree)
+        if not existed and path is not None and os.path.isfile(path):
+            size = os.path.getsize(path)
+            os.remove(path)
+            logger.warning(
+                "Removed the incomplete page %s (%d bytes) left by the failed agent for %s, "
+                "so the next run retries it",
+                path,
+                size,
+                module_name,
+            )
+        raise
 
 
 def reminder_prompt(module_name: str, doc_file: str) -> str:
@@ -157,6 +190,15 @@ async def run_until_doc_written(
     run that used most of its request budget still gets a chance to write.
     Raises :class:`DocumentationWriteError` if all attempts miss the page.
     """
+    with discard_partial_page(deps.absolute_docs_path, module_name, module_path, deps.module_tree):
+        return await _run_until_doc_written(
+            agent, user_prompt, deps, module_name, module_path, layout, usage_limits
+        )
+
+
+async def _run_until_doc_written(
+    agent, user_prompt, deps, module_name, module_path, layout, usage_limits
+) -> tuple[Any, Any]:
     doc_file = module_doc_file(module_name, module_path, layout)
     result = await agent.run(user_prompt, deps=deps, usage_limits=usage_limits)
     usage = run_usage(result)

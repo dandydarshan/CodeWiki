@@ -89,6 +89,19 @@ Edit the file again if necessary.
 """
 
 
+def docs_relative(path: str, docs_root: str) -> str:
+    """``path`` without a leading copy of the docs folder's own name.
+
+    Models often write ``docs/x.md`` (or ``./docs/x.md``) for ``x.md``, which would
+    create a nested ``docs/docs/x.md`` page. Kept when such a subfolder really exists.
+    """
+    parts = [part for part in Path(path).parts if part != "."]
+    name = Path(docs_root).name
+    if len(parts) > 1 and parts[0] == name and not (Path(docs_root) / name).is_dir():
+        return "/".join(parts[1:])  # "/" works on every OS and keeps results comparable
+    return path
+
+
 def maybe_truncate(content: str, truncate_after: int | None = MAX_RESPONSE_LEN):
     """Truncate content and append a notice if content exceeds the specified length."""
     return (
@@ -648,6 +661,13 @@ class EditTool:
         file_content = history_content.expandtabs()
         old_str = old_str.expandtabs()
         new_str = new_str.expandtabs() if new_str is not None else ""
+        if not old_str:
+            # "" "occurs" once in an empty file, and split("") then raises, ending the agent.
+            self.logs.append(
+                "No replacement was performed: old_str is empty. Give the exact text to "
+                "replace, or use `create` to write the whole file."
+            )
+            return
 
         # Check if old_str is unique in the file
         occurrences = file_content.count(old_str)
@@ -929,6 +949,8 @@ async def str_replace_editor(
             f"got absolute path {path!r}."
         )
     base_dir = ctx.deps.absolute_docs_path if working_dir == "docs" else ctx.deps.absolute_repo_path
+    if working_dir == "docs":
+        path = docs_relative(path, base_dir)
     absolute_path = str(Path(base_dir) / path)
     try:
         Path(absolute_path).resolve().relative_to(Path(base_dir).resolve())

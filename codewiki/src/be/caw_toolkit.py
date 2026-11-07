@@ -25,9 +25,9 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from codewiki._vendor.caw import ToolKit, tool
 from mcp.server.fastmcp import Context
 
+from codewiki._vendor.caw import ToolKit, tool
 from codewiki.src.be.agent_tools.deps import CodeWikiDeps
 from codewiki.src.be.dependency_analyzer.utils.paths import (
     normalize_component_id,
@@ -35,7 +35,7 @@ from codewiki.src.be.dependency_analyzer.utils.paths import (
 )
 from codewiki.src.be.doc_layout import config_layout, module_doc_file
 from codewiki.src.be.generation_progress import progress_of
-from codewiki.src.be.module_naming import skipped_report, plan_sub_module_specs, sub_module_report
+from codewiki.src.be.module_naming import plan_sub_module_specs, skipped_report, sub_module_report
 from codewiki.src.be.module_scope import can_split_module, prepare_sized_submodule_partition
 from codewiki.src.config import DEFAULT_MIN_TOKEN_PER_MODULE
 
@@ -205,6 +205,10 @@ class CawToolKit(
             if working_dir == "docs"
             else self._deps.absolute_repo_path
         )
+        if working_dir == "docs":
+            from codewiki.src.be.agent_tools.str_replace_editor import docs_relative
+
+            path = docs_relative(path, base_dir)
         absolute_path = str(Path(base_dir) / path)
 
         # Defense in depth: even with a relative path, ``..`` segments could

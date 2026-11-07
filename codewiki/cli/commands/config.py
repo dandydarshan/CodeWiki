@@ -22,6 +22,15 @@ from codewiki.cli.utils.validation import (
 )
 
 
+def _key_storage(manager: ConfigManager) -> str:
+    """Where the API key is kept; the file fallback is permission-protected, not encrypted."""
+    if manager.keyring_available:
+        return "system keychain"
+    from codewiki.cli import config_manager
+
+    return f"{config_manager.CREDENTIALS_FILE} (owner-only permissions, not encrypted)"
+
+
 def parse_patterns(patterns_str: str) -> List[str]:
     """Parse comma-separated patterns into a list."""
     if not patterns_str:
@@ -485,7 +494,8 @@ def config_set(
                 click.secho("✓ API key saved to system keychain", fg="green")
             else:
                 click.secho(
-                    "⚠️  System keychain unavailable. API key stored in encrypted file.", fg="yellow"
+                    f"⚠️  System keychain unavailable. API key stored in {_key_storage(manager)}.",
+                    fg="yellow",
                 )
 
         if base_url:
@@ -607,7 +617,7 @@ def config_show(output_json: bool):
             # JSON output
             output = {
                 "api_key": mask_api_key(api_key) if api_key else "Not set",
-                "api_key_storage": "keychain" if manager.keyring_available else "encrypted_file",
+                "api_key_storage": "keychain" if manager.keyring_available else "file",
                 "base_url": config.base_url if config else "",
                 "provider": config.provider if config else "",
                 "google_project": config.google_project if config else "",
@@ -657,7 +667,7 @@ def config_show(output_json: bool):
                     fg="cyan",
                 )
             elif api_key:
-                storage = "system keychain" if manager.keyring_available else "encrypted file"
+                storage = _key_storage(manager)
                 click.echo(f"  API Key:          {mask_api_key(api_key)} (in {storage})")
             else:
                 click.secho("  API Key:          Not set", fg="yellow")
@@ -824,7 +834,7 @@ def config_validate(quick: bool, verbose: bool):
                 click.secho(f"✓ API key not required ({reason})", fg="green")
         else:
             if verbose:
-                storage = "system keychain" if manager.keyring_available else "encrypted file"
+                storage = _key_storage(manager)
                 click.echo(f"      Storage: {storage}")
 
             api_key = manager.get_api_key()
@@ -838,7 +848,7 @@ def config_validate(quick: bool, verbose: bool):
                 click.secho("      ✓ API key retrieved", fg="green")
                 click.secho(f"      ✓ Length: {len(api_key)} characters", fg="green")
             else:
-                click.secho("✓ API key present (stored in keychain)", fg="green")
+                click.secho(f"✓ API key present (in {_key_storage(manager)})", fg="green")
 
         # Step 3: Check base URL (skipped for subscription and Google providers)
         if verbose:

@@ -89,17 +89,19 @@ Edit the file again if necessary.
 """
 
 
-def docs_relative(path: str, docs_root: str) -> str:
-    """``path`` without a leading copy of the docs folder's own name.
+def docs_relative(path: str, docs_root: str, module_tree: dict | None = None) -> str:
+    """``path`` without a leading copy of the docs folder's name.
 
-    Models often write ``docs/x.md`` (or ``./docs/x.md``) for ``x.md``, which would
-    create a nested ``docs/docs/x.md`` page. Kept when such a subfolder really exists.
+    Models often write ``docs/x.md`` (the editor's ``working_dir`` name, or the
+    folder's own name) for ``x.md``, which would create a nested ``docs/docs/``
+    page. Kept when that is a real subfolder or a top-level module's folder.
     """
     parts = [part for part in Path(path).parts if part != "."]
-    name = Path(docs_root).name
-    if len(parts) > 1 and parts[0] == name and not (Path(docs_root) / name).is_dir():
-        return "/".join(parts[1:])  # "/" works on every OS and keeps results comparable
-    return path
+    if len(parts) < 2 or parts[0] not in {Path(docs_root).name, "docs"}:
+        return path
+    if (Path(docs_root) / parts[0]).is_dir() or parts[0] in (module_tree or {}):
+        return path
+    return "/".join(parts[1:])  # "/" works on every OS and keeps results comparable
 
 
 def maybe_truncate(content: str, truncate_after: int | None = MAX_RESPONSE_LEN):
@@ -950,7 +952,7 @@ async def str_replace_editor(
         )
     base_dir = ctx.deps.absolute_docs_path if working_dir == "docs" else ctx.deps.absolute_repo_path
     if working_dir == "docs":
-        path = docs_relative(path, base_dir)
+        path = docs_relative(path, base_dir, getattr(ctx.deps, "module_tree", None))
     absolute_path = str(Path(base_dir) / path)
     try:
         Path(absolute_path).resolve().relative_to(Path(base_dir).resolve())

@@ -96,8 +96,9 @@ uses [Semantic Versioning](https://semver.org/).
 - An empty `old_str` in the editor crashed the agent and failed its module.
 - A failed agent's half-written page counted as done on resume, so the module
   was never retried.
-- A path that started with the docs folder's own name created a nested
-  `docs/docs/` page.
+- A path that started with the docs folder's name created a nested
+  `docs/docs/` page; with `-o` set to another folder, models still write
+  `docs/…`, so that prefix is dropped too (unless a module is named `docs`).
 - Ask AI stats counted cached prompt tokens twice.
 - Streamed completions reported the requested model instead of the one that
   answered, so cost was priced on the wrong model.

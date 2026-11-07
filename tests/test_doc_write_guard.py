@@ -362,6 +362,11 @@ def test_docs_folder_name_in_path_does_not_nest_pages(tmp_path, kind):
     docs.mkdir()
     assert docs_relative("./docs/a/b.md", str(docs)) == "a/b.md"
     assert docs_relative("docs.md", str(docs)) == "docs.md"
+    # -o docs_nc: models still write "docs/x.md", the editor's working_dir name
+    assert docs_relative("docs/x.md", str(tmp_path / "docs_nc")) == "x.md"
+    assert docs_relative("docs_nc/x.md", str(tmp_path / "docs_nc")) == "x.md"
+    # a top-level module called "docs" owns the docs/ folder of its child pages
+    assert docs_relative("docs/child.md", str(docs), {"docs": {}}) == "docs/child.md"
     (docs / "docs").mkdir()
     assert docs_relative("docs/x.md", str(docs)) == "docs/x.md"  # a real subfolder is kept
     (docs / "docs").rmdir()

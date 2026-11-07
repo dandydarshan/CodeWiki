@@ -48,16 +48,32 @@ def can_split_module(
     *,
     max_depth: int | None = None,
 ) -> bool:
-    """Use the same cost and depth gate for every documentation agent."""
+    """Use the same cost and depth gate for every documentation agent.
+
+    The depth limit keeps the tree tidy, but never at the cost of code: a module
+    too big for one prompt may split up to ``EXTRA_DEPTH_TO_FIT`` levels deeper.
+    """
     files = component_files(ids, components)
     limit = config.max_depth if max_depth is None else max_depth
     minimum = getattr(config, "min_token_per_module", DEFAULT_MIN_TOKEN_PER_MODULE)
-    return (
-        len(files) > 1
-        and depth < limit
-        and get_module_token_count(components, files)
-        >= max(2 * minimum, config.max_token_per_leaf_module * depth)
-    )
+    tokens = get_module_token_count(components, files)
+    if depth >= limit and not (depth < limit + EXTRA_DEPTH_TO_FIT and tokens > fit_tokens(config)):
+        return False
+    return len(files) > 1 and tokens >= max(2 * minimum, config.max_token_per_leaf_module * depth)
+
+
+# Bounds splitting past max_depth; a module still too big lists its leftover files
+# for the agent to read (format_user_prompt) instead of losing them.
+EXTRA_DEPTH_TO_FIT = 2
+
+
+def fit_tokens(config: Config) -> int:
+    """Code tokens one module prompt can carry: the model's window when known, else
+    the character cap codex enforces (about 4 characters per token)."""
+    from codewiki.src.be.context_budget import prompt_budget
+    from codewiki.src.be.prompt_template import MAX_USER_PROMPT_CHARS
+
+    return prompt_budget(config) or MAX_USER_PROMPT_CHARS // 4
 
 
 def _directory_proximity(left: str, right: str) -> int:

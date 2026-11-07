@@ -24,9 +24,12 @@ from codewiki.src.be.agent_tools.generate_sub_module_documentations import (
 )
 from codewiki.src.be.agent_tools.read_code_components import read_code_components_tool
 from codewiki.src.be.agent_tools.str_replace_editor import str_replace_editor_tool
-from codewiki.src.be.api_usage import track_usage, record_response
+from codewiki.src.be.api_usage import record_response, track_usage
 from codewiki.src.be.backend import AgentReply, LLMBackend, UsageLedger, usage_to_dict
+from codewiki.src.be.context_budget import prompt_budget
 from codewiki.src.be.dependency_analyzer.models.core import Node
+from codewiki.src.be.doc_layout import config_layout, find_doc
+from codewiki.src.be.generation_progress import progress_of
 from codewiki.src.be.llm_services import call_llm, create_fallback_models, pop_last_usage
 from codewiki.src.be.module_scope import (
     can_split_module,
@@ -39,8 +42,6 @@ from codewiki.src.be.prompt_template import (
     format_system_prompt,
     format_user_prompt,
 )
-from codewiki.src.be.generation_progress import progress_of
-from codewiki.src.be.doc_layout import config_layout, find_doc
 from codewiki.src.config import MODULE_TREE_FILENAME, OVERVIEW_FILENAME, Config
 
 logger = logging.getLogger(__name__)
@@ -205,6 +206,7 @@ class PydanticAIBackend(LLMBackend):
             module_tree=deps.module_tree,
             module_path=module_path,
             layout=config_layout(config),
+            max_tokens=prompt_budget(config),
         )
         if not module_path:
             user_prompt = root_recovery_prompt(user_prompt, working_dir, module_name)

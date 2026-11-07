@@ -4,6 +4,7 @@ from typing import Any
 
 from codewiki.src.be.doc_layout import doc_relpaths, module_doc_file
 from codewiki.src.be.mermaid_support import MERMAID_GUIDELINES
+from codewiki.src.be.utils import count_tokens
 from codewiki.src.config import LAYOUT_FLAT
 from codewiki.src.utils import file_manager
 
@@ -114,7 +115,7 @@ Provide `{repo_name}` repo structure:
 {repo_structure}
 </REPO_STRUCTURE>
 
-Child documentation excerpts are supplied below as context. Some excerpts may be truncated or unavailable; use only the supplied evidence and do not invent missing details. No file-reading tools are available or needed. Link to child documentation using its relative `link` field, e.g. [alt text](<link>).
+Child documentation excerpts are supplied below as context. Large ones may be condensed to the child's summary and outline, and some may be truncated or unavailable; use only the supplied evidence and do not invent missing details. No file-reading tools are available or needed. Link to child documentation using its relative `link` field, e.g. [alt text](<link>).
 
 Please generate the overview of the `{repo_name}` repository in markdown format with the following structure:
 <OVERVIEW>
@@ -136,7 +137,7 @@ Provide repo structure of the `{module_name}` module (marked with `is_target_for
 {repo_structure}
 </REPO_STRUCTURE>
 
-Child documentation excerpts are supplied below as context. Some excerpts may be truncated or unavailable; use only the supplied evidence and do not invent missing details. No file-reading tools are available or needed. Link to child documentation using its relative `link` field, e.g. [alt text](<link>).
+Child documentation excerpts are supplied below as context. Large ones may be condensed to the child's summary and outline, and some may be truncated or unavailable; use only the supplied evidence and do not invent missing details. No file-reading tools are available or needed. Link to child documentation using its relative `link` field, e.g. [alt text](<link>).
 
 Please generate the overview of the `{module_name}` module in markdown format with the following structure:
 <OVERVIEW>
@@ -152,7 +153,6 @@ SYSTEM_PROMPT += "\n\n" + _MERMAID_TEMPLATE_GUIDANCE
 LEAF_SYSTEM_PROMPT += "\n\n" + _MERMAID_TEMPLATE_GUIDANCE
 REPO_OVERVIEW_PROMPT += "\n\n" + _MERMAID_TEMPLATE_GUIDANCE
 MODULE_OVERVIEW_PROMPT += "\n\n" + _MERMAID_TEMPLATE_GUIDANCE
-
 CLUSTER_REPO_PROMPT = """
 Here are the core entry points of the repository, grouped by source file:
 <POTENTIAL_CORE_COMPONENTS>
@@ -297,10 +297,30 @@ MODULE_TREE_TRIMMED_NOTE = (
     "code-reading tools when you need component-level detail."
 )
 
-CODE_TRUNCATED_NOTE = (
-    "\n... [file contents truncated to fit the model input limit — use your "
-    "file-reading tools to read the full files]"
+MODULE_TREE_FOCUSED_NOTE = (
+    "NOTE: components are listed for this module, its parent, siblings and children, "
+    "and the modules its code uses or is used by. Other modules are listed by name; "
+    "read their documentation pages or use your code-reading tools for detail."
 )
+
+FILES_NOT_INLINED_NOTE = (
+    "NOTE: these files belong to this module but did not fit in this prompt. They are "
+    "part of the module: read them with `read_code_components` (component IDs below) "
+    "and document them like the inlined files.\n"
+)
+
+PAGE_SUMMARY_GUIDANCE = """<PAGE_SUMMARY>
+End the page with a short summary for the parent module's overview, inside an HTML comment
+exactly like this (readers do not see it):
+<!-- codewiki:summary
+3-6 sentences: what this module does, its key components, and which modules it uses or is used by.
+-->
+</PAGE_SUMMARY>"""
+# Parents are written from children's pages; when those do not all fit, from these summaries.
+# The repo overview has no parent, so it does not need one.
+SYSTEM_PROMPT += "\n\n" + PAGE_SUMMARY_GUIDANCE
+LEAF_SYSTEM_PROMPT += "\n\n" + PAGE_SUMMARY_GUIDANCE
+MODULE_OVERVIEW_PROMPT += "\n\n" + PAGE_SUMMARY_GUIDANCE
 
 # How pages link to each other, appended to the user prompt (after the module
 # tree) by layout. Kept out of USER_PROMPT so the MCP prompt server, which
@@ -450,19 +470,22 @@ def _format_module_tree_str(
     current_module_name: str | None = None,
     include_components: bool = True,
     doc_paths: dict[str, str] | None = None,
+    detailed: set[tuple[str, ...]] | None = None,
 ) -> str:
     """
     Render a module tree as an indented text outline.
 
     With include_components=False only module names and hierarchy are
     emitted, which keeps the outline small enough for huge trees that would
-    otherwise blow past MAX_USER_PROMPT_CHARS. ``doc_paths`` (module name ->
+    otherwise blow past MAX_USER_PROMPT_CHARS. ``detailed`` (module paths)
+    limits component listings to those modules. ``doc_paths`` (module name ->
     page path) adds each module's page path, for the hierarchical layout.
     """
     lines: list[str] = []
 
-    def _walk(tree: dict[str, Any], indent: int = 0) -> None:
+    def _walk(tree: dict[str, Any], indent: int = 0, prefix: tuple[str, ...] = ()) -> None:
         for key, value in tree.items():
+            path = prefix + (key,)
             label = key
             if doc_paths and key in doc_paths:
                 label += f" [page: {doc_paths[key]}]"
@@ -471,7 +494,7 @@ def _format_module_tree_str(
             else:
                 lines.append(f"{'  ' * indent}{label}")
 
-            if include_components:
+            if include_components and (detailed is None or path in detailed):
                 # Group components by file
                 by_file = defaultdict(list)
                 for c in value["components"]:
@@ -492,7 +515,7 @@ def _format_module_tree_str(
                 and len(value["children"]) > 0
             ):
                 lines.append(f"{'  ' * (indent + 1)} Children:")
-                _walk(value["children"], indent + 2)
+                _walk(value["children"], indent + 2, path)
 
     _walk(module_tree, 0)
     return "\n".join(lines)
@@ -532,6 +555,50 @@ def _artifact_group_source(component_ids: list[str], components: dict[str, Any])
     return "\n\n".join((n.source_code or "") for n in nodes)
 
 
+def related_module_paths(
+    module_tree: dict[str, Any],
+    module_path: list[str] | None,
+    core_component_ids: list[str],
+    components: dict[str, Any],
+) -> set[tuple[str, ...]]:
+    """Modules whose components the agent for ``module_path`` needs to see.
+
+    Itself, its ancestors, siblings and children, and the modules that own code
+    it calls or that calls it. The whole-repo agent gets the top-level modules.
+    """
+    path = tuple(module_path or ())
+    owners: dict[str, tuple[str, ...]] = {}
+
+    def walk(tree: dict[str, Any], prefix: tuple[str, ...]) -> None:
+        for name, node in tree.items():
+            here = prefix + (name,)
+            for cid in node.get("components") or []:
+                owners[cid] = here  # children walk later, so the deepest owner wins
+            walk(node.get("children") or {}, here)
+
+    walk(module_tree, ())
+    related = {path[:i] for i in range(1, len(path) + 1)}
+    parent: dict[str, Any] = module_tree
+    for name in path[:-1]:
+        parent = (parent.get(name) or {}).get("children") or {}
+    related |= {path[:-1] + (name,) for name in parent}
+    node = parent.get(path[-1]) if path else None
+    related |= {path + (name,) for name in ((node or {}).get("children") or {})}
+    if not path:
+        return related
+    own = {cid for cid in core_component_ids if cid in components}
+    used = set().union(*(components[cid].depends_on for cid in own)) if own else set()
+    users = {cid for cid, n in components.items() if own & set(n.depends_on or ())}
+    related |= {owners[cid] for cid in used | users if cid in owners}
+    return related
+
+
+def _prompt_fits(text: str, max_chars: int, max_tokens: int) -> bool:
+    if len(text) > max_chars:
+        return False
+    return not max_tokens or count_tokens(text) <= max_tokens
+
+
 def format_user_prompt(
     module_name: str,
     core_component_ids: list[str],
@@ -539,6 +606,7 @@ def format_user_prompt(
     module_tree: dict[str, any],
     module_path: list[str] | None = None,
     layout: str | None = LAYOUT_FLAT,
+    max_tokens: int = 0,
 ) -> str:
     """
     Format the user prompt with module name and organized core component codes.
@@ -550,6 +618,8 @@ def format_user_prompt(
         module_tree: Current module tree
         module_path: Path of the module in the tree (``[]`` for the whole repo)
         layout: Docs layout; the hierarchical layout lists each module's page path
+        max_tokens: Prompt budget from the model's context window (0 = unknown; the
+            character cap codex enforces applies either way)
 
     Returns:
         Formatted user prompt string
@@ -559,7 +629,12 @@ def format_user_prompt(
     doc_paths = None if is_flat_layout(layout) else doc_relpaths(module_tree, layout)
     links_note = format_links_note(module_name, module_path, layout)
 
-    formatted_module_tree = _format_module_tree_str(module_tree, module_name, doc_paths=doc_paths)
+    detailed = related_module_paths(module_tree, module_path, core_component_ids, components)
+    formatted_module_tree = (
+        MODULE_TREE_FOCUSED_NOTE
+        + "\n\n"
+        + _format_module_tree_str(module_tree, module_name, doc_paths=doc_paths, detailed=detailed)
+    )
 
     # Group core component IDs by their file path
     grouped_components: dict[str, list[str]] = {}
@@ -572,9 +647,9 @@ def format_user_prompt(
             grouped_components[path] = []
         grouped_components[path].append(component_id)
 
-    core_component_codes = ""
+    file_blocks: list[tuple[str, list[str], str]] = []  # (path, component ids, block)
     for path, component_ids_in_file in grouped_components.items():
-        core_component_codes += f"# File: {path}\n\n"
+        core_component_codes = f"# File: {path}\n\n"
         core_component_codes += "## Core Components in this file:\n"
 
         for component_id in component_ids_in_file:
@@ -597,6 +672,8 @@ def format_user_prompt(
                 core_component_codes += f"# Error reading file: {e}\n"
 
         core_component_codes += "\n```\n\n"
+        file_blocks.append((path, component_ids_in_file, core_component_codes))
+    core_component_codes = "".join(block for _, _, block in file_blocks)
 
     artifact_index = render_artifact_index(components)
     artifact_section = f"\n\n{artifact_index}\n{ARTIFACT_USAGE_NOTE}" if artifact_index else ""
@@ -621,7 +698,10 @@ def format_user_prompt(
 
     prompt = _assemble(core_component_codes, formatted_module_tree)
 
-    if len(prompt) > MAX_USER_PROMPT_CHARS:
+    def fits(text: str) -> bool:
+        return _prompt_fits(text, MAX_USER_PROMPT_CHARS, max_tokens)
+
+    if not fits(prompt):
         full_len = len(prompt)
         formatted_module_tree = (
             MODULE_TREE_TRIMMED_NOTE
@@ -632,28 +712,49 @@ def format_user_prompt(
         )
         prompt = _assemble(core_component_codes, formatted_module_tree)
         logger.warning(
-            "Module %s: user prompt (%d chars) exceeds %d; "
+            "Module %s: user prompt (%d chars) does not fit the model input; "
             "module tree trimmed to names only (%d chars)",
             module_name,
             full_len,
-            MAX_USER_PROMPT_CHARS,
             len(prompt),
         )
 
-    if len(prompt) > MAX_USER_PROMPT_CHARS:
-        # Even the slim tree was not enough — the inlined file contents
-        # dominate.  Truncation is recoverable: the agent has file-reading
-        # tools (read_code_components / str_replace_editor).
-        excess = len(prompt) - MAX_USER_PROMPT_CHARS + len(CODE_TRUNCATED_NOTE)
-        core_component_codes = (
-            core_component_codes[: max(0, len(core_component_codes) - excess)] + CODE_TRUNCATED_NOTE
-        )
-        prompt = _assemble(core_component_codes, formatted_module_tree)
+    if not fits(prompt):
+        # The module's own code does not fit. Never cut a file: inline whole files
+        # while they fit (dropping the largest first keeps the most files), and list
+        # the rest so the agent reads them with its tools instead of losing them.
+        def listing(blocks: list[tuple[str, list[str], str]]) -> str:
+            lines = [f"- {path}: {', '.join(ids)}" for path, ids, _ in blocks]
+            return "\n" + FILES_NOT_INLINED_NOTE + "\n".join(lines) + "\n"
+
+        def size(text: str) -> tuple[int, int]:
+            return len(text), count_tokens(text) if max_tokens else 0
+
+        base = size(_assemble(listing([]), formatted_module_tree))
+        room = (MAX_USER_PROMPT_CHARS - base[0], (max_tokens - base[1]) if max_tokens else 0)
+        inlined = list(file_blocks)
+        left_out: list[tuple[str, list[str], str]] = []
+        sizes = [size(block[2]) for block in file_blocks]
+        used = [sum(c for c, _ in sizes), sum(t for _, t in sizes)]
+        for i in sorted(range(len(file_blocks)), key=lambda i: sizes[i][0], reverse=True):
+            block = file_blocks[i]
+            over = used[0] > room[0] or (max_tokens and used[1] > room[1])
+            if not over and fits(
+                _assemble("".join(b[2] for b in inlined) + listing(left_out), formatted_module_tree)
+            ):
+                break
+            inlined.remove(block)
+            left_out.append(block)
+            line = size(f"- {block[0]}: {', '.join(block[1])}\n")
+            used = [u - b + li for u, b, li in zip(used, sizes[i], line)]
+        codes = "".join(b[2] for b in inlined) + listing(left_out)
+        prompt = _assemble(codes, formatted_module_tree)
         logger.warning(
-            "Module %s: user prompt still over %d chars after tree trim; "
-            "truncated inlined file contents (now %d chars)",
+            "Module %s: %d of %d files do not fit the model input; listed for the agent "
+            "to read with its tools (prompt now %d chars)",
             module_name,
-            MAX_USER_PROMPT_CHARS,
+            len(left_out),
+            len(file_blocks),
             len(prompt),
         )
 

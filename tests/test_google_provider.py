@@ -221,3 +221,11 @@ def test_call_google_reuses_sync_client(monkeypatch):
     first = google_provider._sync_client_for(config)
     assert google_provider._sync_client_for(config) is first
     assert len(built) == 1
+
+
+def test_configured_window_trims_gemini_agent_history(clean_env, client_spy):
+    from codewiki.src.be.llm_services import _WindowedModel
+
+    model = create_main_model(_config(max_context_tokens=100_000))
+    assert isinstance(model, _WindowedModel) and isinstance(model.wrapped, GoogleModel)
+    assert model._budget > 0

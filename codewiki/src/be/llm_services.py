@@ -15,22 +15,22 @@ from types import SimpleNamespace
 from typing import Optional
 
 from openai.types import chat
-
 from pydantic_ai.exceptions import ModelHTTPError, UnexpectedModelBehavior
+from pydantic_ai.models.wrapper import WrapperModel
 
 try:  # pydantic-ai >= 1.x adds ModelAPIError as the parent of ModelHTTPError
     from pydantic_ai.exceptions import ModelAPIError
 except ImportError:  # older releases (e.g. the pinned 1.0.6) only have ModelHTTPError
     ModelAPIError = ModelHTTPError
+from openai import BadRequestError, DefaultHttpxClient, OpenAI
 from pydantic_ai.models import Model
-from pydantic_ai.models.openai import OpenAIChatModel, OpenAIChatModelSettings
 from pydantic_ai.models.fallback import FallbackModel
+from pydantic_ai.models.openai import OpenAIChatModel, OpenAIChatModelSettings
 from pydantic_ai.providers.openai import OpenAIProvider
-from openai import DefaultHttpxClient, OpenAI, BadRequestError
 
 from codewiki.src.be import context_budget
-from codewiki.src.be.generation_progress import notify_http_response
 from codewiki.src.be.backend import is_google_provider
+from codewiki.src.be.generation_progress import notify_http_response
 from codewiki.src.config import Config
 
 logger = logging.getLogger(__name__)
@@ -336,12 +336,34 @@ def _create_litellm_openai_client(config: Config) -> OpenAI:
     )
 
 
+class _WindowedModel(WrapperModel):
+    """Fit agent history to the context window before each request, as
+    CachingOpenAIModel does for OpenAI-compatible endpoints."""
+
+    def __init__(self, wrapped: Model, budget: int):
+        super().__init__(wrapped)
+        self._budget = budget
+
+    async def request(self, messages, model_settings, model_request_parameters):
+        messages = context_budget.fit_messages(messages, self._budget)
+        return await self.wrapped.request(messages, model_settings, model_request_parameters)
+
+
+def _windowed(model: Model, config: Config) -> Model:
+    # shortcut: configured window only (Gemini errors are not parsed to learn it);
+    # parse them if Gemini users hit context errors without setting max_context_tokens.
+    budget = context_budget.input_budget(
+        getattr(config, "max_context_tokens", 0), getattr(config, "max_tokens", 0) or 0
+    )
+    return _WindowedModel(model, budget) if budget else model
+
+
 def create_main_model(config: Config) -> Model:
     """Create the main LLM model from configuration."""
     if is_google_provider(getattr(config, "provider", "")):
         from codewiki.src.be.google_provider import create_google_model
 
-        return create_google_model(config, config.main_model)
+        return _windowed(create_google_model(config, config.main_model), config)
     return CachingOpenAIModel(
         model_name=config.main_model,
         prompt_caching=config.prompt_caching,
@@ -357,7 +379,7 @@ def create_fallback_model(config: Config) -> Model:
     if is_google_provider(getattr(config, "provider", "")):
         from codewiki.src.be.google_provider import create_google_model
 
-        return create_google_model(config, config.fallback_model)
+        return _windowed(create_google_model(config, config.fallback_model), config)
     return CachingOpenAIModel(
         model_name=config.fallback_model,
         prompt_caching=config.prompt_caching,
@@ -637,8 +659,9 @@ def _call_llm_via_litellm(
 
     litellm handles the provider-specific API translation automatically.
     """
-    import litellm
     import os
+
+    import litellm
 
     litellm_model = _get_litellm_model_name(model, config.provider)
 

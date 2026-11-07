@@ -24,32 +24,32 @@ import contextlib
 import json
 import logging
 import os
+import shutil
 import subprocess
 import tempfile
 import time
-import shutil
 from typing import Any
 
 from codewiki._vendor.caw import Agent as CawAgent
 from codewiki._vendor.caw import ToolGroup
-
 from codewiki.src.be.agent_tools.deps import CodeWikiDeps
 from codewiki.src.be.agent_tools.doc_guard import DocumentationWriteError, doc_written
 from codewiki.src.be.backend import AgentReply, LLMBackend
+from codewiki.src.be.context_budget import prompt_budget
+from codewiki.src.be.dependency_analyzer.models.core import Node
+from codewiki.src.be.doc_layout import config_layout, find_doc, module_doc_file
 from codewiki.src.be.module_scope import (
     can_split_module,
     complete_file_candidates,
     validate_module_file_coverage,
 )
-from codewiki.src.be.dependency_analyzer.models.core import Node
+from codewiki.src.be.overview_support import reusable_overview, root_recovery_prompt
 from codewiki.src.be.prompt_template import (
     format_leaf_system_prompt,
     format_system_prompt,
     format_user_prompt,
 )
 from codewiki.src.be.utils import set_main_loop
-from codewiki.src.be.doc_layout import config_layout, find_doc, module_doc_file
-from codewiki.src.be.overview_support import reusable_overview, root_recovery_prompt
 from codewiki.src.config import MODULE_TREE_FILENAME, OVERVIEW_FILENAME, Config
 from codewiki.src.utils import file_manager
 
@@ -584,6 +584,7 @@ class CawBackend(LLMBackend):
                 module_tree=deps.module_tree,
                 module_path=list(module_path),
                 layout=config_layout(config),
+                max_tokens=prompt_budget(config, self._model),
             )
         if not module_path:
             user_prompt = root_recovery_prompt(user_prompt, working_dir, module_name)

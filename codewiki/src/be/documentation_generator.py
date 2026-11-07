@@ -2,9 +2,9 @@ import asyncio
 import json
 import logging
 import os
-from pathlib import Path
 import traceback
 from copy import deepcopy
+from pathlib import Path
 from typing import Any
 
 from codewiki import __version__
@@ -15,11 +15,11 @@ from codewiki.src.be.cluster_modules import (
     get_clustering_input_token_count,
     super_group_modules,
 )
+from codewiki.src.be.context_budget import prompt_budget
 from codewiki.src.be.crosslinker import CrossLinkReport, crosslink_docs
 from codewiki.src.be.dependency_analyzer import DependencyGraphBuilder
 from codewiki.src.be.dependency_analyzer.analyzers.artifact import render_artifact_index
 from codewiki.src.be.dependency_analyzer.utils.paths import normalize_module_tree_ids
-from codewiki.src.be.generation_progress import NULL_PROGRESS, GenerationProgress
 from codewiki.src.be.doc_layout import (
     config_layout,
     list_doc_files,
@@ -27,15 +27,7 @@ from codewiki.src.be.doc_layout import (
     organize_docs,
     relative_link,
 )
-from codewiki.src.be.utils import validate_mermaid_content
-from codewiki.src.be.overview_support import (
-    bounded_overview_prompt,
-    overview_content,
-    overview_error,
-    preserve_incomplete_overviews,
-    reusable_overview,
-    save_overview,
-)
+from codewiki.src.be.generation_progress import NULL_PROGRESS, GenerationProgress
 from codewiki.src.be.module_naming import (
     dedupe_module_tree_names,
     find_missing_module_docs,
@@ -46,12 +38,21 @@ from codewiki.src.be.module_scope import (
     get_module_token_count,
     validate_module_file_coverage,
 )
+from codewiki.src.be.overview_support import (
+    bounded_overview_prompt,
+    overview_content,
+    overview_error,
+    preserve_incomplete_overviews,
+    reusable_overview,
+    save_overview,
+)
 from codewiki.src.be.prompt_template import (
     MODULE_OVERVIEW_PROMPT,
     REPO_OVERVIEW_ARTIFACT_ADDENDUM,
     REPO_OVERVIEW_PROMPT,
     format_overview_system_prompt,
 )
+from codewiki.src.be.utils import validate_mermaid_content
 from codewiki.src.config import (
     FIRST_MODULE_TREE_FILENAME,
     MODULE_TREE_FILENAME,
@@ -534,7 +535,13 @@ class DocumentationGenerator:
             correction = previous = ""
             for attempt in range(2):
                 request = bounded_overview_prompt(
-                    prompt, children, system_prompt, correction=correction, previous=previous
+                    prompt,
+                    children,
+                    system_prompt,
+                    correction=correction,
+                    previous=previous,
+                    # A single completion: the whole input budget, nothing kept for tools.
+                    budget_tokens=prompt_budget(self.config, share=1.0),
                 )
                 with self.usage_ledger.in_phase(phase, target=module_name):
                     parent_docs = await self._complete(request, system_prompt=system_prompt)

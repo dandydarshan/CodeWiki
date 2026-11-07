@@ -1,32 +1,32 @@
 import asyncio
 import contextlib
+import logging
 from dataclasses import replace
 
-from pydantic_ai import RunContext, Tool, Agent
+from pydantic_ai import Agent, RunContext, Tool
 from pydantic_ai.usage import UsageLimits
 
 from codewiki.src.be.agent_tools.deps import CodeWikiDeps
 from codewiki.src.be.agent_tools.doc_guard import run_until_doc_written
-from codewiki.src.be.doc_layout import config_layout, module_doc_file
-from codewiki.src.be.generation_progress import progress_of
-from codewiki.src.be.module_naming import skipped_report, plan_sub_module_specs, sub_module_report
 from codewiki.src.be.agent_tools.read_code_components import read_code_components_tool
 from codewiki.src.be.agent_tools.str_replace_editor import str_replace_editor_tool
+from codewiki.src.be.api_usage import usage_target
+from codewiki.src.be.context_budget import prompt_budget
+from codewiki.src.be.dependency_analyzer.utils.paths import normalize_component_ids
+from codewiki.src.be.doc_layout import config_layout, module_doc_file
+from codewiki.src.be.generation_progress import progress_of
 from codewiki.src.be.llm_services import create_fallback_models
+from codewiki.src.be.module_naming import plan_sub_module_specs, skipped_report, sub_module_report
+from codewiki.src.be.module_scope import (
+    can_split_module,
+    prepare_sized_submodule_partition,
+)
 from codewiki.src.be.prompt_template import (
     format_leaf_system_prompt,
     format_system_prompt,
     format_user_prompt,
 )
-from codewiki.src.be.dependency_analyzer.utils.paths import normalize_component_ids
 from codewiki.src.config import DEFAULT_MIN_TOKEN_PER_MODULE
-from codewiki.src.be.module_scope import (
-    can_split_module,
-    prepare_sized_submodule_partition,
-)
-
-import logging
-from codewiki.src.be.api_usage import usage_target
 
 logger = logging.getLogger(__name__)
 
@@ -192,6 +192,7 @@ async def generate_sub_module_documentation(
                             module_tree=deps.module_tree,
                             module_path=list(sub_deps.path_to_current_module),
                             layout=layout,
+                            max_tokens=prompt_budget(deps.config),
                         ),
                         deps=sub_deps,
                         module_name=sub_module_name,

@@ -6,6 +6,15 @@ uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [2.1.1] - 2026-11-07
+
+### Fixed
+
+- **`codewiki` crashed on start on Windows** with an `AssertionError` from
+  `dotenv`. Finding `.env` walked the call stack to a source file, and the
+  compiled wheel run from `codewiki.exe` has none. `.env` is now found from
+  the current folder. (`python -m codewiki` was not affected.)
+
 ## [2.1.0] - 2026-11-07
 
 ### Added

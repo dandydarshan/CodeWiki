@@ -3,11 +3,13 @@ import os
 from dataclasses import dataclass, field
 from typing import Any
 
-from dotenv import load_dotenv
+from dotenv import find_dotenv, load_dotenv
 
 from codewiki.src.language import format_language_directive, normalize_language
 
-load_dotenv()
+# usecwd: the default walks stack frames to a source file, which a compiled module on
+# Windows (codewiki.exe launcher, no .py on disk) never reaches, and fails an assert.
+load_dotenv(find_dotenv(usecwd=True))
 
 # Constants
 OUTPUT_BASE_DIR = "output"

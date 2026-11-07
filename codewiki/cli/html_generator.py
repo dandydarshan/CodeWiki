@@ -11,13 +11,17 @@ from typing import Optional, Dict, Any
 from codewiki.cli.utils.errors import FileSystemError
 from codewiki.cli.utils.fs import safe_write, safe_read
 from codewiki.src.be.search_index import build_search_index
-from codewiki.src.config import DEFAULT_QA_PORT, QA_PORT_COUNT, SEARCH_INDEX_FILENAME
+from codewiki.src.config import (
+    DEFAULT_QA_PORT,
+    MODULE_TREE_OWNERSHIP_VALIDATOR,
+    QA_PORT_COUNT,
+    SEARCH_INDEX_FILENAME,
+)
 from codewiki.src.language import language_tag
 
 logger = logging.getLogger(__name__)
 
 DOCS_TEMPLATES_DIR = Path(__file__).parent.parent / "templates" / "docs"
-MODULE_TREE_OWNERSHIP_VALIDATOR = "validate_module_tree_ownership.py"
 
 
 class HTMLGenerator:

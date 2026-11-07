@@ -12,7 +12,7 @@ from codewiki.src.be.dependency_analyzer.topo_sort import (
     build_graph_from_components,
     get_leaf_nodes,
 )
-from codewiki.src.config import Config
+from codewiki.src.config import MODULE_TREE_OWNERSHIP_VALIDATOR, Config
 from codewiki.src.utils import file_manager
 
 logger = logging.getLogger(__name__)
@@ -23,6 +23,22 @@ class DependencyGraphBuilder:
 
     def __init__(self, config: Config):
         self.config = config
+
+    def _own_output_patterns(self) -> list[str]:
+        """Repo-relative patterns for what CodeWiki itself writes into the docs folder.
+
+        Re-analysing them on the next run added the helper script's ~17 functions (and the
+        caches under temp/) to the user's code, and could even give them a page. Only these
+        are skipped: the docs folder may also hold the user's own files.
+        """
+        docs_dir = getattr(self.config, "docs_dir", None)
+        if not docs_dir:
+            return []
+        rel = os.path.relpath(os.path.abspath(docs_dir), os.path.abspath(self.config.repo_path))
+        if rel == "." or rel.startswith(".."):
+            return []  # docs written to the repo root or outside it
+        rel = rel.replace(os.sep, "/")
+        return [f"{rel}/temp", f"{rel}/{MODULE_TREE_OWNERSHIP_VALIDATOR}"]
 
     def build_dependency_graph(self) -> tuple[dict[str, Any], list[str]]:
         """
@@ -61,6 +77,7 @@ class DependencyGraphBuilder:
         # Get custom include/exclude patterns from config
         include_patterns = self.config.include_patterns if self.config.include_patterns else None
         exclude_patterns = self.config.exclude_patterns if self.config.exclude_patterns else None
+        exclude_patterns = (exclude_patterns or []) + self._own_output_patterns() or None
 
         artifact_options = ArtifactOptions(
             enabled=getattr(self.config, "artifacts_enabled", True),

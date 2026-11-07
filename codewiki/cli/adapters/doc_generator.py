@@ -18,17 +18,17 @@ import click
 from codewiki.cli.models.job import DocumentationJob, LLMConfig
 from codewiki.cli.utils.errors import APIError, IncompleteGenerationError
 from codewiki.cli.utils.progress import ProgressTracker
+from codewiki.src.be.doc_layout import list_doc_files
 
 # Import backend modules
 from codewiki.src.be.documentation_generator import DocumentationGenerator
-from codewiki.src.be.doc_layout import list_doc_files
 from codewiki.src.config import (
     DEFAULT_CONCURRENCY,
     DEFAULT_LAYOUT,
     DEFAULT_MAX_TOKEN_PER_LEAF_MODULE,
+    set_cli_context,
 )
 from codewiki.src.config import Config as BackendConfig
-from codewiki.src.config import set_cli_context
 from codewiki.src.utils import portable_repo_path
 
 
@@ -349,6 +349,10 @@ class CLIDocumentationGenerator:
         # Build dependency graph
         try:
             components, leaf_nodes = doc_generator.graph_builder.build_dependency_graph()
+            # Trees saved by an older CodeWiki may not cover every file the analysis finds now.
+            from codewiki.src.be.module_scope import fit_saved_trees
+
+            fit_saved_trees(str(self.output_dir.absolute()), components)
             self.job.statistics.total_files_analyzed = len(components)
             self.job.statistics.leaf_nodes = len(leaf_nodes)
 
@@ -402,11 +406,11 @@ class CLIDocumentationGenerator:
             get_clustering_input_token_count,
             super_group_modules,
         )
-        from codewiki.src.config import FIRST_MODULE_TREE_FILENAME, MODULE_TREE_FILENAME
         from codewiki.src.be.module_scope import (
             get_module_token_count,
             validate_module_file_coverage,
         )
+        from codewiki.src.config import FIRST_MODULE_TREE_FILENAME, MODULE_TREE_FILENAME
         from codewiki.src.utils import file_manager
 
         working_dir = str(self.output_dir.absolute())
@@ -598,6 +602,13 @@ class CLIDocumentationGenerator:
                 0.9,
                 f"Update outcome: {record.outcome} (diff {summary['diff_counts']}, "
                 f"{summary['n_active']} active leaves, {summary['n_calls']} LLM calls)",
+            )
+        if record.errors:
+            # The run goes on past a failed leaf; say so, or a partial update reads as complete.
+            self.progress_tracker.note(
+                f"⚠️  The update had {len(record.errors)} error(s); the pages involved may be "
+                "out of date (details in update_record.json). Rerun --update to retry:\n  "
+                + "\n  ".join(e[:300] for e in record.errors)
             )
         working_dir = str(self.output_dir.absolute())
         if record.outcome in ("incremental", "no_change"):

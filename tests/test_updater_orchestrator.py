@@ -383,3 +383,16 @@ def test_ownership_closure_switched_off(tmp_path):
     backend = FakeBackend(route_to="api")
     docs, rec = _run_untracked(tmp_path / "r1", backend, UpdateOptions.from_rung(1))
     assert backend.routing_prompts == [] and rec.ownership == [] and rec.active == []
+
+
+def test_failed_update_agent_is_a_run_error_not_a_no_op(tmp_path):
+    docs, config, prev = _setup(tmp_path)
+
+    class Failing(FakeBackend):
+        async def run_update_agent(self, system_prompt, user_prompt, deps):
+            raise RuntimeError("request_limit of 100 exceeded")
+
+    rec = _run(docs, config, prev, Failing(), UpdateOptions(tau_full=2.0, tau_tree=2.0))
+    assert any("request_limit of 100 exceeded" in e for e in rec.errors)
+    failed = [v for v in rec.verdicts if "update agent failed" in v["reason"]]
+    assert failed and all(v["verdict"] == "no-op" for v in failed)

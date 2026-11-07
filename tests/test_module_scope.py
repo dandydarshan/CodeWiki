@@ -484,3 +484,49 @@ def test_delegate_normalizes_files_before_running_subagents(tmp_path, monkeypatc
     assert deps.scope_component_ids == ids[:3]
     assert deps.current_module_name == "Parent" and deps.current_depth == 1
     validate_module_file_coverage(tree, components)
+
+
+def _file_node(path: str, name: str) -> Node:
+    return Node(
+        id=f"{path}::{name}",
+        name=name,
+        component_type="function",
+        file_path=path,
+        relative_path=path,
+        source_code=f"def {name}():\n    return 1\n",
+    )
+
+
+def test_saved_tree_from_an_older_version_is_fitted_to_the_current_code(tmp_path):
+    from codewiki.src.be.module_scope import fit_saved_trees, fit_tree_to_code
+
+    nodes = [
+        _file_node("src/auth/login.py", "login"),
+        _file_node("src/auth/tokens.py", "issue"),  # new since the tree was saved
+        _file_node("src/billing/pay.py", "pay"),
+        _file_node(".editorconfig", "editorconfig"),  # analysed now, not by the old version
+    ]
+    components = {n.id: n for n in nodes}
+    tree = {
+        "auth": {
+            "components": ["src/auth/login.py::login", "src/auth/old.py::gone"],
+            "children": {},
+        },
+        "billing": {"components": ["src/billing/pay.py::pay"], "children": {}},
+    }
+    with pytest.raises(ValueError, match="Invalid module file coverage"):
+        validate_module_file_coverage(tree, components)
+    assert fit_tree_to_code(tree, components) == (2, 1)
+    assert "src/auth/tokens.py::issue" in tree["auth"]["components"]  # nearest directory
+    assert "src/auth/old.py::gone" not in tree["auth"]["components"]  # no longer in the code
+    validate_module_file_coverage(tree, components)  # passes now
+    assert fit_tree_to_code(tree, components) == (0, 0)  # idempotent
+    assert fit_tree_to_code({}, components) == (0, 0)  # one-page mode is left alone
+
+    (tmp_path / "module_tree.json").write_text(
+        json.dumps({"auth": {"components": ["src/auth/login.py::login"], "children": {}}}),
+        encoding="utf-8",
+    )
+    fit_saved_trees(str(tmp_path), components)
+    saved = json.loads((tmp_path / "module_tree.json").read_text(encoding="utf-8"))
+    validate_module_file_coverage(saved, components)

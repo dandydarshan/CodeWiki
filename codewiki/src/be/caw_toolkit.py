@@ -208,7 +208,7 @@ class CawToolKit(
         if working_dir == "docs":
             from codewiki.src.be.agent_tools.str_replace_editor import docs_relative
 
-            path = docs_relative(path, base_dir)
+            path = docs_relative(path, base_dir, getattr(self._deps, "module_tree", None))
         absolute_path = str(Path(base_dir) / path)
 
         # Defense in depth: even with a relative path, ``..`` segments could

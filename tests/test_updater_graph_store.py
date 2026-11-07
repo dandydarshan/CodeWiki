@@ -389,3 +389,30 @@ def test_a_repo_root_is_never_cleared(tmp_path):
     assert (repo / "overview.md").exists() and (repo / ".git").exists()
     assert not list(tmp_path.glob("repo.prev-*"))
     assert "never cleared" in gen.notes[-1]
+
+
+def test_generated_docs_files_collapse_in_pull_requests_but_pages_do_not(tmp_path):
+    """metadata.json and update_record.json showed 112 and 577 diff lines in a real PR."""
+    from codewiki.src.be.documentation_generator import write_docs_gitattributes
+
+    repo = tmp_path / "repo"
+    (repo / "docs").mkdir(parents=True)
+    _git(tmp_path, "init", "-q", str(repo))
+    write_docs_gitattributes(str(repo / "docs"))
+
+    def generated(path):
+        return _git(repo, "check-attr", "linguist-generated", "--", path).rsplit(": ", 1)[-1]
+
+    for path in (
+        "docs/metadata.json",
+        "docs/update_record.json",
+        "docs/search_index.json",
+        "docs/index.html",
+    ):
+        assert generated(path) == "true", path
+    assert generated("docs/overview.md") == "unspecified"  # pages stay reviewable
+    assert generated("docs/sub/metadata.json") == "unspecified"  # anchored to docs/ only
+
+    (repo / "docs" / ".gitattributes").write_text("*.md diff=markdown\n")  # a user's own file
+    write_docs_gitattributes(str(repo / "docs"))
+    assert (repo / "docs" / ".gitattributes").read_text() == "*.md diff=markdown\n"

@@ -37,7 +37,9 @@ Git stores the graph compactly: a 5 MB graph added 0.6 MB to the repository
 history, and each later update about 1 KB. CodeWiki writes `docs/temp/.gitattributes`
 so the graph shows no diffs, collapses in GitHub pull requests, and is never
 text-merged, and `docs/temp/.gitignore` so scratch files (`*.prev.json`) stay
-out. If two branches both updated the docs, the merge conflicts in `docs/`:
+out. `docs/.gitattributes` likewise collapses `metadata.json`, `update_record.json`,
+the module trees, `search_index.json` and `index.html` in pull requests, so reviews
+show the pages. If two branches both updated the docs, the merge conflicts in `docs/`:
 keep one side (`git checkout --ours docs/`), commit, then run
 `codewiki generate --update` on the result.
 

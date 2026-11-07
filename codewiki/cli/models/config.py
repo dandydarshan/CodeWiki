@@ -9,6 +9,11 @@ to the backend Config class when running documentation generation.
 from dataclasses import dataclass, field
 
 from codewiki.src.language import format_language_directive
+from codewiki.src.config import (
+    DEFAULT_MAX_TOKEN_PER_LEAF_MODULE,
+    DEFAULT_MIN_TOKEN_PER_MODULE,
+    validate_min_module_tokens,
+)
 from codewiki.cli.utils.validation import (
     validate_model_name,
     validate_url,
@@ -151,9 +156,12 @@ class Configuration:
         aws_region: AWS region for Bedrock provider
         api_version: Azure OpenAI API version
         azure_deployment: Azure OpenAI deployment name
+        google_project: Google Cloud project for google-vertex
+        google_location: Vertex AI location for google-vertex
         max_tokens: Maximum tokens for LLM response (default: 32768)
+        min_token_per_module: Minimum code tokens per standalone module (default: 1000)
         max_token_per_module: Maximum tokens per module for clustering (default: 36369)
-        max_token_per_leaf_module: Maximum tokens per leaf module (default: 16000)
+        max_token_per_leaf_module: Base token threshold to allow delegation (default: 8000)
         max_depth: Maximum depth for hierarchical decomposition (default: 2)
         request_limit: Maximum model requests per agent run (default: 100)
         agent_retries: Retries for a failing tool call (default: 3)
@@ -173,9 +181,12 @@ class Configuration:
     aws_region: str = "us-east-1"
     api_version: str = "2024-12-01-preview"
     azure_deployment: str = ""
+    google_project: str = ""
+    google_location: str = ""
     max_tokens: int = 32768
+    min_token_per_module: int = DEFAULT_MIN_TOKEN_PER_MODULE
     max_token_per_module: int = 36369
-    max_token_per_leaf_module: int = 16000
+    max_token_per_leaf_module: int = DEFAULT_MAX_TOKEN_PER_LEAF_MODULE
     max_depth: int = 2
     request_limit: int = 100
     agent_retries: int = 3
@@ -183,7 +194,18 @@ class Configuration:
     max_context_tokens: int = 0
     use_gitignore: bool = True
     prompt_caching: bool = True
+    pricing: dict = field(default_factory=dict)
     agent_instructions: AgentInstructions = field(default_factory=AgentInstructions)
+
+    def __post_init__(self):
+        from codewiki.src.be.pricing import validate_pricing
+        from codewiki.cli.utils.errors import ConfigurationError
+
+        try:
+            validate_pricing(self.pricing)
+            validate_min_module_tokens(self.min_token_per_module)
+        except ValueError as exc:
+            raise ConfigurationError(str(exc)) from exc
 
     def validate(self):
         """
@@ -195,12 +217,15 @@ class Configuration:
         Raises:
             ConfigurationError: If validation fails
         """
-        from codewiki.src.be.backend import is_caw_provider
+        from codewiki.src.be.backend import is_caw_provider, needs_base_url
+
+        validate_min_module_tokens(self.min_token_per_module)
 
         if is_caw_provider(self.provider):
             validate_model_name(self.main_model)
             return
-        validate_url(self.base_url)
+        if needs_base_url(self.provider):
+            validate_url(self.base_url)
         validate_model_name(self.main_model)
         validate_model_name(self.cluster_model)
         validate_model_name(self.fallback_model)
@@ -216,7 +241,10 @@ class Configuration:
             "aws_region": self.aws_region,
             "api_version": self.api_version,
             "azure_deployment": self.azure_deployment,
+            "google_project": self.google_project,
+            "google_location": self.google_location,
             "max_tokens": self.max_tokens,
+            "min_token_per_module": self.min_token_per_module,
             "max_token_per_module": self.max_token_per_module,
             "max_token_per_leaf_module": self.max_token_per_leaf_module,
             "max_depth": self.max_depth,
@@ -226,6 +254,7 @@ class Configuration:
             "max_context_tokens": self.max_context_tokens,
             "use_gitignore": self.use_gitignore,
             "prompt_caching": self.prompt_caching,
+            "pricing": self.pricing,
             "fallback_model": self.fallback_model,
         }
         if self.agent_instructions and not self.agent_instructions.is_empty():
@@ -257,9 +286,14 @@ class Configuration:
             aws_region=data.get("aws_region", "us-east-1"),
             api_version=data.get("api_version", "2024-12-01-preview"),
             azure_deployment=data.get("azure_deployment", ""),
+            google_project=data.get("google_project", ""),
+            google_location=data.get("google_location", ""),
             max_tokens=data.get("max_tokens", 32768),
+            min_token_per_module=data.get("min_token_per_module", DEFAULT_MIN_TOKEN_PER_MODULE),
             max_token_per_module=data.get("max_token_per_module", 36369),
-            max_token_per_leaf_module=data.get("max_token_per_leaf_module", 16000),
+            max_token_per_leaf_module=data.get(
+                "max_token_per_leaf_module", DEFAULT_MAX_TOKEN_PER_LEAF_MODULE
+            ),
             max_depth=data.get("max_depth", 2),
             request_limit=data.get("request_limit", 100),
             agent_retries=data.get("agent_retries", 3),
@@ -267,6 +301,7 @@ class Configuration:
             max_context_tokens=data.get("max_context_tokens", 0),
             use_gitignore=data.get("use_gitignore", True),
             prompt_caching=data.get("prompt_caching", True),
+            pricing=data.get("pricing", {}),
             agent_instructions=agent_instructions,
         )
 
@@ -275,15 +310,14 @@ class Configuration:
 
         Subscription-mode providers (claude-code, codex) only require
         ``main_model``; ``base_url``, ``cluster_model`` and ``fallback_model``
-        are unused.
+        are unused. Google providers need no ``base_url``.
         """
-        from codewiki.src.be.backend import is_caw_provider
+        from codewiki.src.be.backend import is_caw_provider, needs_base_url
 
         if is_caw_provider(self.provider):
             return bool(self.main_model)
-        return bool(
-            self.base_url and self.main_model and self.cluster_model and self.fallback_model
-        )
+        has_url = bool(self.base_url) or not needs_base_url(self.provider)
+        return bool(has_url and self.main_model and self.cluster_model and self.fallback_model)
 
     def to_backend_config(
         self,
@@ -327,7 +361,10 @@ class Configuration:
             aws_region=self.aws_region,
             api_version=self.api_version,
             azure_deployment=self.azure_deployment,
+            google_project=self.google_project,
+            google_location=self.google_location,
             max_tokens=self.max_tokens,
+            min_token_per_module=self.min_token_per_module,
             max_token_per_module=self.max_token_per_module,
             max_token_per_leaf_module=self.max_token_per_leaf_module,
             max_depth=self.max_depth,
@@ -338,4 +375,5 @@ class Configuration:
             agent_instructions=final_instructions.to_dict() if final_instructions else None,
             use_gitignore=self.use_gitignore,
             prompt_caching=self.prompt_caching,
+            pricing=self.pricing,
         )

@@ -32,9 +32,6 @@ class FakeBackend:
         self.routing_prompts = []
         self.last_usage = None
 
-    async def run_overview_agent(self, prompt, *, system_prompt=None, **_):
-        return self.complete(prompt, system_prompt=system_prompt)
-
     def complete(self, prompt, *, model=None, system_prompt=None):
         self.complete_calls.append(prompt[:80])
         self.last_usage = {"prompt_tokens": 10, "completion_tokens": 5}
@@ -49,7 +46,7 @@ class FakeBackend:
             else:
                 decisions = [{"component_id": c, "action": "untracked"} for c in ids]
             return "```json\n" + json.dumps({"decisions": decisions}) + "\n```"
-        return "<OVERVIEW>regenerated overview</OVERVIEW>"
+        return "<OVERVIEW># Overview\n\nregenerated overview of the modules.</OVERVIEW>"
 
     async def run_module_agent(
         self, module_name, components, core_component_ids, module_path, working_dir
@@ -295,6 +292,22 @@ def test_whole_repo_baseline_falls_back_when_scope_needs_clustering(tmp_path):
     assert backend.update_calls == []
     assert json.load(open(docs / "module_tree.json")) == {}
     assert (docs / "overview.md").exists()
+
+
+def test_whole_repo_growth_counts_methods_outside_leaf_entry_points(tmp_path):
+    docs, config, prev = _setup(tmp_path, tree={})
+    backend = FakeBackend()
+    graph = graph_r2()
+    method_id = "src/engine.go::Engine.execute"
+    graph[method_id] = node(method_id, "method", "execute();\n" * 20000)
+    updater = IncrementalUpdater(config, backend, _generator(config, backend), UpdateOptions())
+    record = asyncio.run(
+        updater.run(prev, graph, sorted(tracked_r2()), {"old_commit": "old", "new_commit": "new"})
+    )
+    assert record.fallback["leaf_tokens"] < config.max_token_per_module
+    assert record.fallback["clustering_tokens"] > config.max_token_per_module
+    assert record.outcome == "full_fallback"
+    assert backend.module_calls == [] and backend.update_calls == []
 
 
 # ------------------------------------------------------------ ownership closure

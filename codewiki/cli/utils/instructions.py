@@ -55,6 +55,10 @@ def _compact(n: float) -> str:
 
 def _echo_usage(statistics: dict) -> None:
     """Print the run's token usage and estimated cost, if any was recorded."""
+    report = statistics.get("usage_report")
+    if report:
+        _echo_usage_report(report, statistics.get("provider", ""))
+        return
     tokens = statistics.get("total_tokens_used") or 0
     if not tokens:
         return
@@ -91,6 +95,69 @@ def _echo_usage(statistics: dict) -> None:
             )
 
 
+def _usd(cost: float) -> str:
+    if cost == 0 or cost >= 0.01:
+        return f"${cost:,.2f}"
+    if cost < 0.00000001:
+        return "<$0.00000001"
+    return f"${cost:.8f}".rstrip("0")
+
+
+def _echo_usage_report(report: dict, provider: str) -> None:
+    totals = report["totals"]
+    tokens = int(totals.get("input_tokens", 0) + totals.get("output_tokens", 0))
+    click.echo(f"  LLM calls:         {report['n_calls']:,} (this run)")
+    click.echo(
+        f"  Tokens used:       {tokens:,} (in {_compact(totals.get('input_tokens', 0))}"
+        f" / out {_compact(totals.get('output_tokens', 0))})"
+    )
+    status = report["cost_status"]
+    note = (
+        " (API-equivalent; billed to your subscription)"
+        if provider in ("claude-code", "codex")
+        else ""
+    )
+    if status == "unknown":
+        click.echo("  Est. cost:         unknown")
+    else:
+        partial = " (partial; unpriced calls excluded)" if status == "partial" else ""
+        click.echo(f"  Est. cost:         {_usd(totals.get('cost_usd', 0))}{partial}{note}")
+    if report.get("incomplete"):
+        click.secho("  Run incomplete: available usage only.", fg="yellow")
+    if report.get("unknown_usage_calls"):
+        click.secho(
+            f"  Usage unavailable for {report['unknown_usage_calls']} call(s).", fg="yellow"
+        )
+    if report.get("unpriced_models"):
+        click.secho(f"  Cost unknown for:  {', '.join(report['unpriced_models'])}", fg="yellow")
+        if provider == "codex":
+            click.echo(
+                "    set a price: caw pricing set codex <model> --input <usd/1M> --output <usd/1M>"
+            )
+        elif provider != "claude-code":
+            click.echo(
+                "    set a price: codewiki config pricing set MODEL --input USD_PER_1M --output USD_PER_1M"
+            )
+    for title, groups in (("By model", report["by_model"]), ("By phase", report["by_phase"])):
+        if not groups:
+            continue
+        width = max(len(title), *(len(name) for name in groups))
+        click.echo(
+            f"\n  {title:<{width}}  {'Calls':>5}  {'Input':>9}  {'Output':>9}  {'Cache read/write':>19}  Est. USD"
+        )
+        for name, group in sorted(groups.items()):
+            cost = _usd(group["cost_usd"]) if "cost_usd" in group else "unknown"
+            if group.get("unpriced_calls") == group["calls"]:
+                cost = "unknown"
+            elif group.get("unpriced_calls") and "cost_usd" in group:
+                cost += " (partial)"
+            cached = f"{int(group.get('cache_read_tokens', 0)):,}/{int(group.get('cache_write_tokens', 0)):,}"
+            click.echo(
+                f"  {name:<{width}}  {group['calls']:>5}  {int(group.get('input_tokens', 0)):>9,}"
+                f"  {int(group.get('output_tokens', 0)):>9,}  {cached:>19}  {cost}"
+            )
+
+
 def display_post_generation_instructions(
     output_dir: Path,
     repo_name: str,
@@ -99,6 +166,7 @@ def display_post_generation_instructions(
     github_pages: bool = False,
     files_generated: list = None,
     statistics: dict = None,
+    techdocs=None,
 ):
     """
     Display post-generation instructions.
@@ -109,6 +177,7 @@ def display_post_generation_instructions(
         repo_url: GitHub repository URL (optional)
         branch_name: Git branch name (optional)
         github_pages: Whether GitHub Pages HTML was generated
+        techdocs: TechDocsResult of the --techdocs export, if one was written
         files_generated: List of generated files
         statistics: Generation statistics
     """
@@ -142,6 +211,14 @@ def display_post_generation_instructions(
             seconds = int(statistics["generation_time"] % 60)
             click.echo(f"  Generation time:   {minutes} minutes {seconds} seconds")
         _echo_usage(statistics)
+        click.echo()
+
+    if techdocs is not None:
+        from codewiki.cli.commands.techdocs import echo_techdocs_next_steps
+
+        click.secho("Backstage TechDocs:", fg="cyan", bold=True)
+        click.echo(f"  {techdocs.pages} pages in {techdocs.out_dir}")
+        echo_techdocs_next_steps(techdocs)
         click.echo()
 
     # Next steps

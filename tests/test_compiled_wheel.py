@@ -184,7 +184,10 @@ def test_module_agent_end_to_end_with_scripted_model(tmp_path, monkeypatch):
     assert leaves
 
     (out / MODULE_TREE_FILENAME).write_text(
-        json.dumps({"Core": {"path": "pkg", "components": leaves, "children": {}}}),
+        json.dumps(
+            # every file owned by a module, as clustering guarantees
+            {"Core": {"path": "pkg", "components": sorted(components), "children": {}}}
+        ),
         encoding="utf-8",
     )
 

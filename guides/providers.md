@@ -1,8 +1,8 @@
 # Providers and models
 
 CodeWiki calls an LLM for module clustering and for writing each page. You
-pick where those calls go with `codewiki config set --provider ...`. Seven
-providers are supported. Two of them need no API key at all.
+pick where those calls go with `codewiki config set --provider ...`. Nine
+providers are supported. Three of them need no API key at all.
 
 | Provider | Needs | Good for |
 | --- | --- | --- |
@@ -11,6 +11,8 @@ providers are supported. Two of them need no API key at all.
 | `anthropic` | API key | Direct Anthropic API |
 | `azure-openai` | API key + resource URL + deployment | Azure-hosted OpenAI models |
 | `bedrock` | AWS credentials + region | Anthropic and other models on AWS Bedrock |
+| `google` | Gemini API key | Gemini models through the Gemini API (AI Studio) |
+| `google-vertex` | Google credentials + project | Gemini models on Vertex AI, billed to a Google Cloud project, no API key |
 | `claude-code` | Claude Code CLI logged in | Run on a Claude Pro or Max subscription, no per-token billing |
 | `codex` | Codex CLI logged in | Run on a Codex subscription, no per-token billing |
 
@@ -53,6 +55,46 @@ codewiki config set \
   --main-model anthropic.claude-sonnet-4-v2:0 \
   --cluster-model anthropic.claude-sonnet-4-v2:0
 ```
+
+### Google (Gemini API and Vertex AI)
+
+Both Google providers talk to Gemini natively, so Gemini 3 thought signatures
+survive tool-call turns. No base URL is needed.
+
+```bash
+# Vertex AI: Google credentials (gcloud auth application-default login, or
+# Workload Identity Federation in CI), no API key
+codewiki config set \
+  --provider google-vertex \
+  --google-project YOUR_PROJECT \
+  --google-location eu \
+  --main-model gemini-3.8-flash \
+  --cluster-model gemini-3.8-flash
+
+# Gemini API: the key is read from GEMINI_API_KEY (or GOOGLE_API_KEY) when
+# --api-key is omitted
+codewiki config set \
+  --provider google \
+  --main-model gemini-3.8-flash \
+  --cluster-model gemini-3.8-flash
+```
+
+Notes:
+
+- **Location.** `--google-location` accepts `global`, `us` or `eu`; it defaults
+  to `GOOGLE_CLOUD_LOCATION`, then `global`. `eu` and `us` need google-genai
+  2.x. `us-central1` does not serve Gemini 3.x.
+- **Project.** `--google-project` defaults to `GOOGLE_CLOUD_PROJECT`. With
+  neither set, a run fails at startup.
+- **Fallback model.** It defaults to the main model, because the usual default
+  (`glm-4p5`) does not exist on Google endpoints.
+- **Output budget.** Thinking tokens share the `--max-tokens` budget. If pages
+  come back empty with `finish_reason=MAX_TOKENS`, raise `--max-tokens` to
+  65536.
+- **Privacy.** Google may use prompts sent with a free-tier AI Studio key for
+  product improvement. Use a paid key, or Vertex AI, for private code.
+- **Cost.** Configure Gemini API rates with `codewiki config pricing set`.
+  Calls without configured rates are reported as unpriced.
 
 ### Atlas Cloud
 
@@ -108,14 +150,39 @@ Things to know:
 
 ### Cost tracking
 
-At the end of `codewiki generate`, CodeWiki prints the tokens used and an
-estimated cost for the run. `metadata.json` gets a `usage` block with totals,
-a per-phase breakdown (`clustering`, `modules`, `parent_modules`, `overview`,
-`update`) and one entry per LLM call. Each nested sub-module agent is counted
-once. Modules resumed from an earlier run cost nothing and don't appear.
+At the end of `codewiki generate` and `codewiki generate --update`, CodeWiki
+prints tokens and estimated USD cost, grouped by model and phase. The same
+report is saved in `metadata.json` under `usage`; updates also attach it to
+`update_record.json` and metadata's update history. Totals cover the current
+invocation, including nested agents, retries with reported usage, and fallback
+models. Resumed pages add no usage; unchanged updates show zero calls and cost.
 
-The cost is what the same tokens would cost on the API. Your subscription
-is billed as usual.
+For **API providers**, set your own rates in USD per million tokens. These
+example numbers are illustrative; use the rates charged by your endpoint:
+
+```bash
+codewiki config pricing set YOUR_MODEL --input 1 --output 2 \
+  --cache-read 0.25 --cache-write 1.25
+codewiki config pricing show --json
+codewiki config pricing remove YOUR_MODEL
+```
+
+Rates are stored by provider and model in `~/.codewiki/config.json`.
+`--provider` defaults to the active provider. Configure main, cluster, and
+fallback models separately when their names differ. Cache rates default to
+the input rate when omitted, and explicit zero rates are supported. The report
+records the effective rates and both requested and returned model names;
+returned-model rates take precedence over the requested alias's rates.
+
+Cached tokens are included in input totals, not added again. Costs apply each
+cache rate to its subset and the input rate to the remaining input. Unknown
+prices or unavailable usage never block generation: estimates are labeled
+`partial` or `unknown`, with the affected models listed. Failed runs save and
+print available usage with an incomplete marker. Estimates are not invoices.
+
+**Subscription providers** retain the cost returned through their integration;
+CodeWiki's API pricing settings do not override it. The displayed cost is an
+API-equivalent estimate; your subscription is billed as usual.
 
 - **Claude Code** reports the cost itself.
 - **Codex** is priced from caw's rate table using the model Codex actually
@@ -126,6 +193,13 @@ is billed as usual.
   ```bash
   caw pricing set codex <model> --input <usd/1M> --cached <usd/1M> --output <usd/1M>
   ```
+
+For an opt-in live check, run
+`.venv/bin/python tests/smoke_test_costs.py --env-file /absolute/path/.env`
+from the project root. It maps `BASE_URL`, `API_KEY`, `MAIN_MODEL`, and
+`FALLBACK_MODEL` into an isolated temporary configuration, generates a tiny
+repository's docs, updates them, and checks an unchanged update. Its synthetic
+rates validate arithmetic rather than provider billing; logs redact credentials.
 
 ## Which model to use
 

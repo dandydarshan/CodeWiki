@@ -50,6 +50,7 @@ def _config(**overrides) -> Config:
         llm_api_key="key",
         main_model="m",
         cluster_model="m",
+        min_token_per_module=1,
     )
     return Config.from_cli(**kwargs, **overrides)
 
@@ -137,12 +138,13 @@ def test_cluster_batch_fits_respects_node_count_and_token_budget():
 # ---------------------------------------------------------------------------
 
 
-def test_cluster_modules_none_response_returns_empty_tree():
+def test_cluster_modules_none_response_keeps_file_partition():
     ids = [f"lib/f{i}.py::C{i}" for i in range(3)]
     components = _components(ids)
     config = _config(max_token_per_module=1)
     result = cluster_modules(ids, components, config, {}, None, [], completer=lambda prompt: None)
-    assert result == {}
+    assert len(result) == 3
+    assert sorted(cid for info in result.values() for cid in info["components"]) == ids
 
 
 def test_parse_super_group_response_handles_none_and_garbage():

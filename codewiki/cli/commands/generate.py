@@ -283,6 +283,18 @@ def _confirm_what_is_documented(
     help="Generate index.html for GitHub Pages deployment",
 )
 @click.option(
+    "--techdocs",
+    is_flag=True,
+    help="Also export a Backstage TechDocs project (mkdocs.yml + docs/) to --techdocs-dir",
+)
+@click.option(
+    "--techdocs-dir",
+    type=click.Path(file_okay=False),
+    default="techdocs",
+    show_default=True,
+    help="Where --techdocs writes the TechDocs project (outside the --output directory)",
+)
+@click.option(
     "--no-cache",
     is_flag=True,
     help="Force full regeneration, ignoring cache",
@@ -348,6 +360,12 @@ def _confirm_what_is_documented(
     help="Maximum tokens for LLM response (overrides config)",
 )
 @click.option(
+    "--min-token-per-module",
+    type=click.IntRange(min=1),
+    default=None,
+    help="Minimum code tokens per standalone module (default: 1000)",
+)
+@click.option(
     "--max-token-per-module",
     type=int,
     default=None,
@@ -357,7 +375,7 @@ def _confirm_what_is_documented(
     "--max-token-per-leaf-module",
     type=int,
     default=None,
-    help="Maximum tokens per leaf module (overrides config)",
+    help="Base code-token threshold to allow delegation (overrides config)",
 )
 @click.option(
     "--max-depth",
@@ -521,6 +539,8 @@ def generate_command(
     create_branch: bool,
     yes: bool,
     github_pages: bool,
+    techdocs: bool,
+    techdocs_dir: str,
     no_cache: bool,
     include: str | None,
     exclude: str | None,
@@ -539,6 +559,7 @@ def generate_command(
     concurrency: int | None,
     max_context_tokens: int | None,
     prompt_caching: bool | None,
+    min_token_per_module: int | None = None,
     main_model: str | None = None,
     cluster_model: str | None = None,
     fallback_model: str | None = None,
@@ -575,6 +596,10 @@ def generate_command(
     \b
     # With git branch creation and GitHub Pages
     $ codewiki generate --create-branch --github-pages
+
+    \b
+    # Also export a Backstage TechDocs project to ./techdocs
+    $ codewiki generate --techdocs
 
     \b
     # Force full regeneration
@@ -670,6 +695,16 @@ def generate_command(
         # Validate output directory
         output_dir = Path(output).expanduser().resolve()
         check_writable_output(output_dir.parent)
+        techdocs_out = None
+        if techdocs:
+            from codewiki.cli.techdocs_generator import check_output_dir
+
+            techdocs_out = Path(techdocs_dir).expanduser().resolve()
+            # Fail before the LLM run, not after it
+            try:
+                check_output_dir(techdocs_out, output_dir)
+            except ValueError as e:
+                raise ConfigurationError(f"--techdocs-dir: {e}") from e
 
         logger.success(f"Output directory: {output_dir}")
         if is_git_repository(repo_path):
@@ -706,10 +741,7 @@ def generate_command(
                 repo_path, output_dir, logger, verbose, compare_to=compare_to
             )
             if changed_files is not None and len(changed_files) == 0:
-                logger.success(
-                    "No changes detected since last generation. Documentation is up to date."
-                )
-                sys.exit(EXIT_SUCCESS)
+                logger.info("No committed changes detected; checking documentation state.")
             if changed_files is not None and update_rung == "0":
                 logger.info(
                     f"  Detected {len(changed_files)} changed files — regenerating affected modules."
@@ -822,6 +854,9 @@ def generate_command(
             )
             logger.debug(f"Main model: {main_model or config.main_model}")
             logger.debug(f"Cluster model: {cluster_model or config.cluster_model}")
+            logger.debug(
+                f"Min token/module: {min_token_per_module if min_token_per_module is not None else getattr(config, 'min_token_per_module', 1000)}"
+            )
             logger.debug(f"Max tokens: {effective_max_tokens}")
             logger.debug(f"Max token/module: {effective_max_token_per_module}")
             logger.debug(f"Max token/leaf module: {effective_max_token_per_leaf}")
@@ -873,10 +908,16 @@ def generate_command(
                 "base_url": config.base_url,
                 "api_key": api_key,
                 "provider": getattr(config, "provider", "openai-compatible"),
+                "pricing": getattr(config, "pricing", {}),
                 "aws_region": getattr(config, "aws_region", "us-east-1"),
+                "google_project": getattr(config, "google_project", ""),
+                "google_location": getattr(config, "google_location", ""),
                 "agent_instructions": agent_instructions_dict,
                 # Max token settings (runtime overrides take precedence)
                 "max_tokens": max_tokens if max_tokens is not None else config.max_tokens,
+                "min_token_per_module": min_token_per_module
+                if min_token_per_module is not None
+                else getattr(config, "min_token_per_module", 1000),
                 "max_token_per_module": max_token_per_module
                 if max_token_per_module is not None
                 else config.max_token_per_module,
@@ -929,6 +970,7 @@ def generate_command(
             },
             verbose=verbose,
             generate_html=github_pages,
+            techdocs_dir=techdocs_out,
             commit_id=commit_id,
         )
 
@@ -958,12 +1000,14 @@ def generate_command(
             repo_url=repo_url,
             branch_name=branch_name,
             github_pages=github_pages,
+            techdocs=generator.techdocs_result,
             files_generated=job.files_generated,
             statistics={
                 "module_count": job.module_count,
                 "total_files_analyzed": job.statistics.total_files_analyzed,
                 "generation_time": generation_time,
                 "total_tokens_used": job.statistics.total_tokens_used,
+                "usage_report": job.statistics.usage_report,
                 "usage_totals": job.statistics.usage_totals,
                 "total_cost_usd": job.statistics.total_cost_usd,
                 "unpriced_models": job.statistics.unpriced_models,

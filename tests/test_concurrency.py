@@ -111,12 +111,9 @@ class _SlowBackend:
         self.finished.append(module_name)
         return json.loads(Path(working_dir, "module_tree.json").read_text())
 
-    async def run_overview_agent(self, prompt, *, system_prompt=None, **_):
-        return self.complete(prompt, system_prompt=system_prompt)
-
     def complete(self, prompt, model=None, system_prompt=None):
         self.finished.append("<overview>")
-        return "<OVERVIEW>overview</OVERVIEW>"
+        return "<OVERVIEW># Overview\n\nHow these modules fit together.</OVERVIEW>"  # a valid page
 
 
 def _run(tmp_path, concurrency):
@@ -178,10 +175,20 @@ class _FakeCawBackend:
             Path(working_dir, f"{module_name}.md").write_text(f"# {module_name}\n")
 
 
-def test_caw_sub_modules_run_side_by_side_within_the_slot_budget(tmp_path):
+def _without_size_gates(monkeypatch, module):
+    """These tests are about concurrency; the module-size gates have their own tests."""
+    monkeypatch.setattr(module, "can_split_module", lambda *a, **k: True)
+    monkeypatch.setattr(
+        module, "prepare_sized_submodule_partition", lambda specs, *a, **k: (specs, {})
+    )
+
+
+def test_caw_sub_modules_run_side_by_side_within_the_slot_budget(tmp_path, monkeypatch):
     from codewiki.src.be.agent_tools.deps import CodeWikiDeps
+    import codewiki.src.be.caw_toolkit as caw_toolkit
     from codewiki.src.be.caw_toolkit import CawToolKit
 
+    _without_size_gates(monkeypatch, caw_toolkit)
     backend = _FakeCawBackend(size=3)
     deps = CodeWikiDeps(
         absolute_docs_path=str(tmp_path),
@@ -193,7 +200,7 @@ def test_caw_sub_modules_run_side_by_side_within_the_slot_budget(tmp_path):
         module_tree={"parent": {"components": [], "children": {}}},
         max_depth=2,
         current_depth=1,
-        config=SimpleNamespace(layout="flat"),
+        config=SimpleNamespace(layout="flat", max_token_per_module=36369),
     )
     toolkit = CawToolKit(deps=deps, backend=backend, allow_subagent=True)
     specs = {f"sub{i}": [f"f{i}.py::X"] for i in range(5)}
@@ -223,7 +230,7 @@ def test_pydantic_sub_modules_run_concurrently_with_their_own_deps(tmp_path, mon
         def __init__(self, *args, name=None, **kwargs):
             self.name = name
 
-        async def run(self, prompt, deps, usage_limits=None):
+        async def run(self, prompt, deps, usage_limits=None, **_):
             state["active"] += 1
             state["peak"] = max(state["peak"], state["active"])
             seen.append(
@@ -235,6 +242,7 @@ def test_pydantic_sub_modules_run_concurrently_with_their_own_deps(tmp_path, mon
 
     monkeypatch.setattr(tool_mod, "Agent", FakeAgent)
     monkeypatch.setattr(tool_mod, "create_fallback_models", lambda config: None)
+    _without_size_gates(monkeypatch, tool_mod)
 
     messages: list[str] = []
     progress = GenerationProgress(concurrency=3, emit=messages.append)
@@ -249,7 +257,11 @@ def test_pydantic_sub_modules_run_concurrently_with_their_own_deps(tmp_path, mon
         max_depth=2,
         current_depth=1,
         config=SimpleNamespace(
-            layout="flat", max_token_per_leaf_module=4000, agent_retries=1, request_limit=5
+            layout="flat",
+            max_token_per_leaf_module=4000,
+            max_token_per_module=36369,
+            agent_retries=1,
+            request_limit=5,
         ),
         slots=AgentSlots(3),
         progress=progress,
@@ -412,13 +424,14 @@ def test_pydantic_failed_sub_module_does_not_fail_its_parent(tmp_path, monkeypat
         def __init__(self, *args, name=None, **kwargs):
             pass
 
-        async def run(self, prompt, deps, usage_limits=None):
+        async def run(self, prompt, deps, usage_limits=None, **_):
             if deps.current_module_name == "bad":
                 raise RuntimeError("Request timed out")
             Path(deps.absolute_docs_path, f"{deps.current_module_name}.md").write_text("# page\n")
 
     monkeypatch.setattr(tool_mod, "Agent", FakeAgent)
     monkeypatch.setattr(tool_mod, "create_fallback_models", lambda config: None)
+    _without_size_gates(monkeypatch, tool_mod)
 
     progress = GenerationProgress(concurrency=2, emit=lambda _m: None)
     deps = CodeWikiDeps(
@@ -432,7 +445,11 @@ def test_pydantic_failed_sub_module_does_not_fail_its_parent(tmp_path, monkeypat
         max_depth=2,
         current_depth=1,
         config=SimpleNamespace(
-            layout="flat", max_token_per_leaf_module=4000, agent_retries=1, request_limit=5
+            layout="flat",
+            max_token_per_leaf_module=4000,
+            max_token_per_module=36369,
+            agent_retries=1,
+            request_limit=5,
         ),
         slots=AgentSlots(2),
         progress=progress,

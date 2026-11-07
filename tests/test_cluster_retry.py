@@ -23,12 +23,17 @@ def _components(ids: list[str]) -> dict[str, Node]:
     for cid in ids:
         rel_path, _, name = cid.partition("::")
         nodes[cid] = Node(
-            id=cid, name=name, component_type="class", file_path=rel_path,
-            relative_path=rel_path, source_code="code",
+            id=cid,
+            name=name,
+            component_type="class",
+            file_path=rel_path,
+            relative_path=rel_path,
+            source_code=SOURCE,
         )
     return nodes
 
 
+SOURCE = "def run(x):\n    return x + 1\n" * 10  # sized like real code
 COMPONENTS = _components(IDS)
 # One directory's code fits the whole-module threshold; two do not.
 THRESHOLD = get_clustering_input_token_count([i for i in IDS if i.startswith("d0/")], COMPONENTS)
@@ -36,8 +41,14 @@ THRESHOLD = get_clustering_input_token_count([i for i in IDS if i.startswith("d0
 
 def _config() -> Config:
     return Config.from_cli(
-        repo_path="/tmp/repo", output_dir="/tmp/out", llm_base_url="http://localhost",
-        llm_api_key="key", main_model="m", cluster_model="m", max_token_per_module=THRESHOLD,
+        repo_path="/tmp/repo",
+        output_dir="/tmp/out",
+        llm_base_url="http://localhost",
+        llm_api_key="key",
+        main_model="m",
+        cluster_model="m",
+        max_token_per_module=THRESHOLD,
+        min_token_per_module=50,
     )
 
 
@@ -109,8 +120,13 @@ def test_batch_ids_leave_room_for_other_tokenizers():
     from codewiki.src.be.utils import count_tokens
 
     config = Config.from_cli(
-        repo_path="/tmp/repo", output_dir="/tmp/out", llm_base_url="http://localhost",
-        llm_api_key="key", main_model="m", cluster_model="m", max_tokens=32768,
+        repo_path="/tmp/repo",
+        output_dir="/tmp/out",
+        llm_base_url="http://localhost",
+        llm_api_key="key",
+        main_model="m",
+        cluster_model="m",
+        max_tokens=32768,
         max_leaf_nodes_per_cluster=10_000,
     )
     ids = [f"src/app/widgets/w{i}/w{i}.component.ts::Widget{i}Component" for i in range(2000)]

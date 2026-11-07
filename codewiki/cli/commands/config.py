@@ -11,6 +11,7 @@ from typing import Optional, List
 from codewiki.cli.config_manager import ConfigManager
 from codewiki.cli.models.config import AgentInstructions
 from codewiki.src.language import normalize_language
+from codewiki.src.config import DEFAULT_MAX_TOKEN_PER_LEAF_MODULE
 from codewiki.cli.utils.errors import ConfigurationError, handle_error, EXIT_CONFIG_ERROR
 from codewiki.cli.utils.validation import (
     validate_url,
@@ -34,6 +35,110 @@ def config_group():
     pass
 
 
+@config_group.group(name="pricing")
+def pricing_group():
+    """Manage API prices in USD per million tokens."""
+
+
+def _pricing_manager():
+    manager = ConfigManager()
+    try:
+        manager.load()
+    except ConfigurationError as exc:
+        raise click.ClickException(str(exc)) from exc
+    return manager
+
+
+def _pricing_provider(manager, provider):
+    provider = provider or (
+        manager.get_config().provider if manager.get_config() else "openai-compatible"
+    )
+    supported = {
+        "openai-compatible",
+        "atlas-cloud",
+        "anthropic",
+        "bedrock",
+        "azure-openai",
+        "google",
+        "google-vertex",
+    }
+    if provider not in supported:
+        raise click.BadParameter(
+            "Choose an API provider; Claude Code and Codex use their provider cost results.",
+            param_hint="--provider",
+        )
+    return provider
+
+
+@pricing_group.command(name="set")
+@click.argument("model")
+@click.option(
+    "--input", "input_rate", required=True, type=float, help="USD per million input tokens."
+)
+@click.option(
+    "--output", "output_rate", required=True, type=float, help="USD per million output tokens."
+)
+@click.option("--cache-read", type=float, help="Defaults to the input rate.")
+@click.option("--cache-write", type=float, help="Defaults to the input rate.")
+@click.option("--provider", help="Defaults to the active API provider.")
+def pricing_set(model, input_rate, output_rate, cache_read, cache_write, provider):
+    """Set rates for MODEL. Explicit zero rates are supported."""
+    from copy import deepcopy
+    from codewiki.src.be.pricing import validate_pricing
+
+    manager = _pricing_manager()
+    provider = _pricing_provider(manager, provider)
+    pricing = deepcopy(manager.get_config().pricing) if manager.get_config() else {}
+    rates = {"input": input_rate, "output": output_rate}
+    if cache_read is not None:
+        rates["cache_read"] = cache_read
+    if cache_write is not None:
+        rates["cache_write"] = cache_write
+    pricing.setdefault(provider, {})[model] = rates
+    try:
+        validate_pricing(pricing)
+        manager.save(pricing=pricing)
+    except (ValueError, ConfigurationError) as exc:
+        raise click.ClickException(str(exc)) from exc
+    click.echo(f"API pricing saved for {provider}/{model} (USD per million tokens).")
+
+
+@pricing_group.command(name="show")
+@click.option("--json", "output_json", is_flag=True)
+def pricing_show(output_json):
+    """Show configured rates for all API providers."""
+    manager = _pricing_manager()
+    pricing = manager.get_config().pricing if manager.get_config() else {}
+    if output_json:
+        click.echo(json.dumps(pricing, indent=2, sort_keys=True))
+    elif not pricing:
+        click.echo("No API prices configured. Use 'codewiki config pricing set --help'.")
+    else:
+        click.echo("API pricing (USD per million tokens; omitted cache rates use input):")
+        for provider, models in sorted(pricing.items()):
+            for model, rates in sorted(models.items()):
+                click.echo(f"  {provider}/{model}: {json.dumps(rates, sort_keys=True)}")
+
+
+@pricing_group.command(name="remove")
+@click.argument("model")
+@click.option("--provider", help="Defaults to the active API provider.")
+def pricing_remove(model, provider):
+    """Remove configured rates for MODEL."""
+    from copy import deepcopy
+
+    manager = _pricing_manager()
+    provider = _pricing_provider(manager, provider)
+    pricing = deepcopy(manager.get_config().pricing) if manager.get_config() else {}
+    if model not in pricing.get(provider, {}):
+        raise click.ClickException(f"No price configured for {provider}/{model}")
+    del pricing[provider][model]
+    if not pricing[provider]:
+        del pricing[provider]
+    manager.save(pricing=pricing)
+    click.echo(f"API pricing removed for {provider}/{model}.")
+
+
 @config_group.command(name="set")
 @click.option("--api-key", type=str, help="LLM API key (stored securely in system keychain)")
 @click.option("--base-url", type=str, help="LLM API base URL (e.g., https://api.anthropic.com)")
@@ -42,12 +147,20 @@ def config_group():
 @click.option("--fallback-model", type=str, help="Fallback model for documentation generation")
 @click.option("--max-tokens", type=int, help="Maximum tokens for LLM response (default: 32768)")
 @click.option(
+    "--min-token-per-module",
+    type=click.IntRange(min=1),
+    default=None,
+    help="Minimum code tokens per standalone module (default: 1000)",
+)
+@click.option(
     "--max-token-per-module",
     type=int,
     help="Maximum tokens per module for clustering (default: 36369)",
 )
 @click.option(
-    "--max-token-per-leaf-module", type=int, help="Maximum tokens per leaf module (default: 16000)"
+    "--max-token-per-leaf-module",
+    type=int,
+    help=f"Base code-token threshold to allow delegation (default: {DEFAULT_MAX_TOKEN_PER_LEAF_MODULE})",
 )
 @click.option(
     "--max-depth", type=int, help="Maximum depth for hierarchical decomposition (default: 2)"
@@ -76,12 +189,16 @@ def config_group():
             "azure-openai",
             "claude-code",
             "codex",
+            "google",
+            "google-vertex",
         ],
         case_sensitive=False,
     ),
     help=(
         "LLM provider type (default: openai-compatible). "
         "Use 'atlas-cloud' for Atlas Cloud (base URL auto-set; reads ATLASCLOUD_API_KEY). "
+        "Use 'google' for the Gemini API (reads GEMINI_API_KEY / GOOGLE_API_KEY) or "
+        "'google-vertex' for Vertex AI with Google credentials (no API key). "
         "Use 'claude-code' or 'codex' to run on a CLI subscription instead of an API key."
     ),
 )
@@ -90,6 +207,17 @@ def config_group():
     "--api-version", type=str, help="Azure OpenAI API version (default: 2024-12-01-preview)"
 )
 @click.option("--azure-deployment", type=str, help="Azure OpenAI deployment name")
+@click.option(
+    "--google-project",
+    type=str,
+    help="Google Cloud project for google-vertex (default: GOOGLE_CLOUD_PROJECT)",
+)
+@click.option(
+    "--google-location",
+    type=str,
+    help="Vertex AI location for google-vertex, e.g. global, eu, us "
+    "(default: GOOGLE_CLOUD_LOCATION, else global)",
+)
 @click.option(
     "--use-gitignore/--no-gitignore",
     default=None,
@@ -111,6 +239,7 @@ def config_set(
     max_token_per_module: Optional[int],
     max_token_per_leaf_module: Optional[int],
     max_depth: Optional[int],
+    min_token_per_module: Optional[int] = None,
     request_limit: Optional[int] = None,
     agent_retries: Optional[int] = None,
     concurrency: Optional[int] = None,
@@ -119,6 +248,8 @@ def config_set(
     aws_region: Optional[str] = None,
     api_version: Optional[str] = None,
     azure_deployment: Optional[str] = None,
+    google_project: Optional[str] = None,
+    google_location: Optional[str] = None,
     use_gitignore: Optional[bool] = None,
     prompt_caching: Optional[bool] = None,
 ):
@@ -152,6 +283,16 @@ def config_set(
     $ codewiki config set --provider codex --main-model gpt-5.2-codex
 
     \b
+    # Vertex AI (Google credentials, no API key or base URL)
+    $ codewiki config set --provider google-vertex --google-project my-proj \\
+        --google-location eu --main-model gemini-3.8-flash --cluster-model gemini-3.8-flash
+
+    \b
+    # Gemini API (key read from GEMINI_API_KEY if --api-key is omitted)
+    $ codewiki config set --provider google --main-model gemini-3.8-flash \\
+        --cluster-model gemini-3.8-flash
+
+    \b
     # Update only API key
     $ codewiki config set --api-key sk-new-key
 
@@ -181,6 +322,7 @@ def config_set(
                 cluster_model,
                 fallback_model,
                 max_tokens,
+                min_token_per_module,
                 max_token_per_module,
                 max_token_per_leaf_module,
                 max_depth,
@@ -192,6 +334,8 @@ def config_set(
                 aws_region,
                 api_version,
                 azure_deployment,
+                google_project,
+                google_location,
                 use_gitignore is not None,
                 prompt_caching is not None,
             ]
@@ -209,6 +353,20 @@ def config_set(
                 base_url = ATLAS_CLOUD_BASE_URL
             if not api_key:
                 api_key = os.getenv("ATLASCLOUD_API_KEY")
+
+        manager = ConfigManager()
+        manager.load()  # Load existing config if present
+
+        if provider and provider.lower() == "google" and not api_key:
+            api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
+            previous = manager.get_config()
+            if not api_key and not (previous and previous.provider == "google"):
+                # The keyring has one key slot: reusing it would send another
+                # provider's key to Google.
+                raise ConfigurationError(
+                    "--provider google needs a Gemini API key: pass --api-key or set "
+                    "GEMINI_API_KEY (or GOOGLE_API_KEY)."
+                )
 
         # Validate inputs before saving
         validated_data = {}
@@ -232,6 +390,9 @@ def config_set(
             if max_tokens < 1:
                 raise ConfigurationError("max_tokens must be a positive integer")
             validated_data["max_tokens"] = max_tokens
+
+        if min_token_per_module is not None:
+            validated_data["min_token_per_module"] = min_token_per_module
 
         if max_token_per_module is not None:
             if max_token_per_module < 1:
@@ -286,9 +447,11 @@ def config_set(
         if prompt_caching is not None:
             validated_data["prompt_caching"] = prompt_caching
 
-        # Create config manager and save
-        manager = ConfigManager()
-        manager.load()  # Load existing config if present
+        if google_project is not None:
+            validated_data["google_project"] = google_project
+
+        if google_location is not None:
+            validated_data["google_location"] = google_location
 
         manager.save(
             api_key=validated_data.get("api_key"),
@@ -297,6 +460,7 @@ def config_set(
             cluster_model=validated_data.get("cluster_model"),
             fallback_model=validated_data.get("fallback_model"),
             max_tokens=validated_data.get("max_tokens"),
+            min_token_per_module=validated_data.get("min_token_per_module"),
             max_token_per_module=validated_data.get("max_token_per_module"),
             max_token_per_leaf_module=validated_data.get("max_token_per_leaf_module"),
             max_depth=validated_data.get("max_depth"),
@@ -308,6 +472,8 @@ def config_set(
             aws_region=validated_data.get("aws_region"),
             api_version=validated_data.get("api_version"),
             azure_deployment=validated_data.get("azure_deployment"),
+            google_project=validated_data.get("google_project"),
+            google_location=validated_data.get("google_location"),
             use_gitignore=validated_data.get("use_gitignore"),
             prompt_caching=validated_data.get("prompt_caching"),
         )
@@ -348,6 +514,9 @@ def config_set(
         if max_tokens:
             click.secho(f"✓ Max tokens: {max_tokens}", fg="green")
 
+        if min_token_per_module is not None:
+            click.secho(f"✓ Min token per module: {min_token_per_module}", fg="green")
+
         if max_token_per_module:
             click.secho(f"✓ Max token per module: {max_token_per_module}", fg="green")
 
@@ -380,6 +549,12 @@ def config_set(
 
         if azure_deployment:
             click.secho(f"✓ Azure Deployment: {azure_deployment}", fg="green")
+
+        if google_project:
+            click.secho(f"✓ Google project: {google_project}", fg="green")
+
+        if google_location:
+            click.secho(f"✓ Google location: {google_location}", fg="green")
 
         if use_gitignore is not None:
             click.secho(f"✓ Use gitignore: {use_gitignore}", fg="green")
@@ -434,13 +609,19 @@ def config_show(output_json: bool):
                 "api_key": mask_api_key(api_key) if api_key else "Not set",
                 "api_key_storage": "keychain" if manager.keyring_available else "encrypted_file",
                 "base_url": config.base_url if config else "",
+                "provider": config.provider if config else "",
+                "google_project": config.google_project if config else "",
+                "google_location": config.google_location if config else "",
                 "main_model": config.main_model if config else "",
                 "cluster_model": config.cluster_model if config else "",
                 "fallback_model": config.fallback_model if config else "glm-4p5",
                 "default_output": config.default_output if config else "docs",
                 "max_tokens": config.max_tokens if config else 32768,
+                "min_token_per_module": config.min_token_per_module if config else 1000,
                 "max_token_per_module": config.max_token_per_module if config else 36369,
-                "max_token_per_leaf_module": config.max_token_per_leaf_module if config else 16000,
+                "max_token_per_leaf_module": config.max_token_per_leaf_module
+                if config
+                else DEFAULT_MAX_TOKEN_PER_LEAF_MODULE,
                 "max_depth": config.max_depth if config else 2,
                 "request_limit": config.request_limit if config else 100,
                 "agent_retries": config.agent_retries if config else 3,
@@ -448,6 +629,7 @@ def config_show(output_json: bool):
                 "max_context_tokens": config.max_context_tokens if config else 0,
                 "use_gitignore": config.use_gitignore if config else True,
                 "prompt_caching": config.prompt_caching if config else True,
+                "pricing": config.pricing if config else {},
                 "agent_instructions": config.agent_instructions.to_dict()
                 if config and config.agent_instructions
                 else {},
@@ -461,12 +643,14 @@ def config_show(output_json: bool):
             click.echo("━" * 40)
             click.echo()
 
-            from codewiki.src.be.backend import is_caw_provider
+            from codewiki.src.be.backend import is_caw_provider, needs_base_url
 
             caw_mode = bool(config) and is_caw_provider(config.provider)
 
             click.secho("Credentials", fg="cyan", bold=True)
-            if caw_mode:
+            if config and config.provider == "google-vertex":
+                click.secho("  Google ADC / Workload Identity (no API key needed)", fg="cyan")
+            elif caw_mode:
                 cli_name = "claude" if config.provider == "claude-code" else "codex"
                 click.secho(
                     f"  Subscription mode: authenticate via '{cli_name} login' (no API key needed)",
@@ -484,10 +668,18 @@ def config_show(output_json: bool):
                 click.echo(f"  Provider:         {config.provider}")
                 click.echo(f"  Main Model:       {config.main_model or 'Not set'}")
                 if not caw_mode:
-                    click.echo(f"  Base URL:         {config.base_url or 'Not set'}")
+                    if needs_base_url(config.provider):
+                        click.echo(f"  Base URL:         {config.base_url or 'Not set'}")
                     click.echo(f"  Cluster Model:    {config.cluster_model or 'Not set'}")
                     click.echo(f"  Fallback Model:   {config.fallback_model or 'Not set'}")
-                    if config.provider == "bedrock":
+                    if config.provider == "google-vertex":
+                        project = config.google_project or "from GOOGLE_CLOUD_PROJECT"
+                        location = config.google_location or (
+                            "from GOOGLE_CLOUD_LOCATION, else global"
+                        )
+                        click.echo(f"  Google Project:   {project}")
+                        click.echo(f"  Google Location:  {location}")
+                    elif config.provider == "bedrock":
                         click.echo(f"  AWS Region:       {config.aws_region}")
                     elif config.provider == "azure-openai":
                         click.echo(f"  API Version:      {config.api_version}")
@@ -504,9 +696,13 @@ def config_show(output_json: bool):
             click.secho("Token Settings", fg="cyan", bold=True)
             if config:
                 click.echo(f"  Max Tokens:              {config.max_tokens}")
+                click.echo(f"  Min Token/Module:        {config.min_token_per_module}")
                 click.echo(f"  Max Token/Module:        {config.max_token_per_module}")
                 click.echo(f"  Max Token/Leaf Module:   {config.max_token_per_leaf_module}")
                 click.echo(f"  Prompt Caching:          {config.prompt_caching}")
+                click.echo(
+                    f"  API Pricing:             {json.dumps(config.pricing, sort_keys=True)}"
+                )
 
             click.echo()
             click.secho("Decomposition Settings", fg="cyan", bold=True)
@@ -603,20 +799,29 @@ def config_validate(quick: bool, verbose: bool):
 
         # Load config early so we know the provider for the rest of the checks.
         config = manager.get_config()
-        from codewiki.src.be.backend import is_caw_provider
+        from codewiki.src.be.backend import (
+            is_caw_provider,
+            is_google_provider,
+            needs_api_key,
+            needs_base_url,
+        )
 
         caw_mode = bool(config) and is_caw_provider(config.provider)
+        key_needed = bool(config) and needs_api_key(config.provider)
+        url_needed = bool(config) and needs_base_url(config.provider)
+        api_key = None
 
-        # Step 2: Check API key (skipped for subscription providers)
+        # Step 2: Check API key (skipped for subscription providers and Vertex AI)
         if verbose:
             click.echo()
             click.echo("[2/5] Checking API key...")
 
-        if caw_mode:
+        if not key_needed:
+            reason = "subscription mode" if caw_mode else "Google credentials"
             if verbose:
-                click.secho("      ✓ API key not required (subscription mode)", fg="green")
+                click.secho(f"      ✓ API key not required ({reason})", fg="green")
             else:
-                click.secho("✓ API key not required (subscription mode)", fg="green")
+                click.secho(f"✓ API key not required ({reason})", fg="green")
         else:
             if verbose:
                 storage = "system keychain" if manager.keyring_available else "encrypted file"
@@ -635,16 +840,17 @@ def config_validate(quick: bool, verbose: bool):
             else:
                 click.secho("✓ API key present (stored in keychain)", fg="green")
 
-        # Step 3: Check base URL (skipped for subscription providers)
+        # Step 3: Check base URL (skipped for subscription and Google providers)
         if verbose:
             click.echo()
             click.echo("[3/5] Checking base URL...")
 
-        if caw_mode:
+        if not url_needed:
+            reason = "subscription mode" if caw_mode else "Google endpoint"
             if verbose:
-                click.secho("      ✓ Base URL not required (subscription mode)", fg="green")
+                click.secho(f"      ✓ Base URL not required ({reason})", fg="green")
             else:
-                click.secho("✓ Base URL not required (subscription mode)", fg="green")
+                click.secho(f"✓ Base URL not required ({reason})", fg="green")
         else:
             if verbose:
                 click.echo(f"      URL: {config.base_url}")
@@ -695,7 +901,7 @@ def config_validate(quick: bool, verbose: bool):
             # Warn about non-top-tier cluster model
             if not is_top_tier_model(config.cluster_model):
                 click.secho(
-                    "⚠️  Cluster model is not top-tier. Consider using claude-sonnet-4 or gpt-4.",
+                    "⚠️  Cluster model is not top-tier. Consider a Claude Sonnet/Opus, GPT-5 or Gemini 3 model.",
                     fg="yellow",
                 )
 
@@ -728,6 +934,26 @@ def config_validate(quick: bool, verbose: bool):
                     f"✓ {cli_name} CLI available (run '{cli_name} login' if not yet authenticated)",
                     fg="green",
                 )
+        elif is_google_provider(config.provider) and not quick:
+            if verbose:
+                click.echo()
+                click.echo("[5/5] Testing Google API access...")
+            try:
+                from codewiki.src.be import google_provider
+
+                google_provider.check_access(
+                    config.provider,
+                    api_key if key_needed else None,
+                    config.main_model,
+                    config.google_project,
+                    config.google_location,
+                )
+                click.secho("✓ API connectivity test successful", fg="green")
+            except Exception as e:
+                click.secho("✗ API connectivity test failed", fg="red")
+                if verbose:
+                    click.echo(f"      Error: {e}")
+                sys.exit(EXIT_CONFIG_ERROR)
         elif not quick:
             # Always say so: the import and the request can take a while, in silence otherwise.
             if verbose:

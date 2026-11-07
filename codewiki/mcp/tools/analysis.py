@@ -230,6 +230,9 @@ def _detect_via_mtime(
         ".sc",
         ".rs",
         ".dart",
+        ".go",
+        ".zig",
+        ".vue",
     }
 
     changed: list[str] = []

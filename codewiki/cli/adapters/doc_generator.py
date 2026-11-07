@@ -22,7 +22,11 @@ from codewiki.cli.utils.progress import ProgressTracker
 # Import backend modules
 from codewiki.src.be.documentation_generator import DocumentationGenerator
 from codewiki.src.be.doc_layout import list_doc_files
-from codewiki.src.config import DEFAULT_CONCURRENCY, DEFAULT_LAYOUT
+from codewiki.src.config import (
+    DEFAULT_CONCURRENCY,
+    DEFAULT_LAYOUT,
+    DEFAULT_MAX_TOKEN_PER_LEAF_MODULE,
+)
 from codewiki.src.config import Config as BackendConfig
 from codewiki.src.config import set_cli_context
 from codewiki.src.utils import portable_repo_path
@@ -112,6 +116,7 @@ class CLIDocumentationGenerator:
         verbose: bool = False,
         generate_html: bool = False,
         commit_id: str | None = None,
+        techdocs_dir: Path | None = None,
     ):
         """
         Initialize the CLI documentation generator.
@@ -122,6 +127,7 @@ class CLIDocumentationGenerator:
             config: LLM configuration
             verbose: Enable verbose output
             generate_html: Whether to generate HTML viewer
+            techdocs_dir: Export a Backstage TechDocs project here (None: don't)
             commit_id: Git commit SHA for incremental update tracking
         """
         self.repo_path = repo_path
@@ -129,6 +135,8 @@ class CLIDocumentationGenerator:
         self.config = config
         self.verbose = verbose
         self.generate_html = generate_html
+        self.techdocs_dir = techdocs_dir
+        self.techdocs_result = None
         self.commit_id = commit_id
         self.progress_tracker = ProgressTracker(total_stages=5, verbose=verbose)
         self.job = DocumentationJob()
@@ -225,9 +233,14 @@ class CLIDocumentationGenerator:
                 fallback_model=self.config.get("fallback_model"),
                 provider=self.config.get("provider", "openai-compatible"),
                 aws_region=self.config.get("aws_region", "us-east-1"),
+                google_project=self.config.get("google_project", ""),
+                google_location=self.config.get("google_location", ""),
                 max_tokens=self.config.get("max_tokens", 32768),
+                min_token_per_module=self.config.get("min_token_per_module", 1000),
                 max_token_per_module=self.config.get("max_token_per_module", 36369),
-                max_token_per_leaf_module=self.config.get("max_token_per_leaf_module", 16000),
+                max_token_per_leaf_module=self.config.get(
+                    "max_token_per_leaf_module", DEFAULT_MAX_TOKEN_PER_LEAF_MODULE
+                ),
                 max_leaf_nodes_per_cluster=self.config.get("max_leaf_nodes_per_cluster", 600),
                 max_depth=self.config.get("max_depth", 2),
                 request_limit=self.config.get("request_limit", 100),
@@ -237,6 +250,7 @@ class CLIDocumentationGenerator:
                 agent_instructions=self.config.get("agent_instructions"),
                 use_gitignore=self.config.get("use_gitignore", True),
                 prompt_caching=self.config.get("prompt_caching", True),
+                pricing=self.config.get("pricing", {}),
                 artifacts_enabled=self.config.get("artifacts_enabled", True),
                 artifact_token_budget=self.config.get("artifact_token_budget", 200_000),
                 with_prose=self.config.get("with_prose", False),
@@ -252,19 +266,25 @@ class CLIDocumentationGenerator:
             if self.generate_html:
                 self._run_html_generation()
 
+            if self.techdocs_dir is not None:
+                self._run_techdocs_generation()
+
             # Stage 5: Finalization (metadata already created by backend)
             self._finalize_job()
 
             # Complete job
+            self._finish_usage()
             self.job.complete()
 
             return self.job
 
         except APIError as e:
             self.job.fail(str(e))
+            self._finish_usage(incomplete=True)
             raise
         except Exception as e:
             self.job.fail(str(e))
+            self._finish_usage(incomplete=True)
             raise
 
     def _docs_commit(self) -> str | None:
@@ -381,6 +401,10 @@ class CLIDocumentationGenerator:
             super_group_modules,
         )
         from codewiki.src.config import FIRST_MODULE_TREE_FILENAME, MODULE_TREE_FILENAME
+        from codewiki.src.be.module_scope import (
+            get_module_token_count,
+            validate_module_file_coverage,
+        )
         from codewiki.src.utils import file_manager
 
         working_dir = str(self.output_dir.absolute())
@@ -401,19 +425,20 @@ class CLIDocumentationGenerator:
                     self.progress_tracker.update_stage(0.5, "Loaded cached module tree")
             else:
                 if self.verbose:
-                    clustering_tokens = get_clustering_input_token_count(leaf_nodes, components)
+                    clustering_tokens = get_module_token_count(components)
                     self.progress_tracker.update_stage(
                         0.3,
                         (
                             f"Preparing {len(leaf_nodes)} leaf nodes for clustering "
-                            f"({clustering_tokens} tokens, threshold "
+                            f"(code_tokens={clustering_tokens}, leaf_tokens="
+                            f"{get_clustering_input_token_count(leaf_nodes, components)}, threshold "
                             f"{backend_config.max_token_per_module})"
                         ),
                     )
                     if clustering_tokens <= backend_config.max_token_per_module:
                         self.progress_tracker.update_stage(
                             0.4,
-                            "Skipping LLM clustering; selected leaf nodes fit within the module token threshold",
+                            "Skipping LLM clustering; code size fits within the module token threshold",
                         )
                     else:
                         self.progress_tracker.update_stage(
@@ -439,12 +464,18 @@ class CLIDocumentationGenerator:
                 # Artifact nodes the clustering LLM dropped get a fixed module
                 # so build/CI/config coverage does not depend on the LLM.
                 if getattr(backend_config, "artifacts_enabled", True):
-                    module_tree = ensure_artifact_module(module_tree, leaf_nodes, components)
+                    module_tree = ensure_artifact_module(
+                        module_tree,
+                        leaf_nodes,
+                        components,
+                        min_tokens=backend_config.min_token_per_module,
+                    )
                 # Only freshly clustered trees are deduped: renaming a cached
                 # key whose .md already exists would orphan the doc.
                 from codewiki.src.be.module_naming import dedupe_module_tree_names
 
                 module_tree = dedupe_module_tree_names(module_tree)
+                validate_module_file_coverage(module_tree, components)
                 file_manager.save_json(module_tree, first_module_tree_path)
                 file_manager.save_json(module_tree, module_tree_path)
 
@@ -551,6 +582,7 @@ class CLIDocumentationGenerator:
         updater = IncrementalUpdater(
             backend_config, doc_generator.backend, doc_generator, update_opts
         )
+        self._last_update_record = updater.record
         with doc_generator.usage_ledger.in_phase("update"):
             record = await updater.run(prev_graph_path, components, leaf_nodes, revision)
         # The diff is done (or a full build follows), so drop the scratch copy: left in
@@ -630,6 +662,8 @@ class CLIDocumentationGenerator:
         """
         import shutil
 
+        # metadata.json goes with the docs: keep its update history for the rebuilt docs.
+        self._prior_update_history = self._read_update_history(str(self.output_dir))
         record = getattr(self, "_last_update_record", None)
         name = self.output_dir.name
         if _is_repo_root(self.output_dir):
@@ -640,10 +674,9 @@ class CLIDocumentationGenerator:
             else:
                 if not getattr(self, "_preserved_docs_dir", None):
                     self._backup_docs()
-                note = (
-                    f"previous docs saved to {self._preserved_docs_dir} "
-                    "(not committed; delete it when done)"
-                )
+                # Relative: the note is saved in update_record.json and metadata.json.
+                backup = portable_repo_path(self._preserved_docs_dir, str(self.output_dir))
+                note = f"previous docs saved to {backup} (not committed; delete it when done)"
             shutil.rmtree(self.output_dir)
             self.output_dir.mkdir(parents=True, exist_ok=True)
         if record is not None:
@@ -672,11 +705,17 @@ class CLIDocumentationGenerator:
             return
         from codewiki.src.be.updater.record import merge_into_metadata
 
-        summary = record.summary()
         preserved = getattr(self, "_preserved_docs_dir", None)
+        if self._usage_ledger is not None:
+            record.usage_report = self._usage_ledger.summary()
+        summary = record.summary()
         if preserved:
             summary["previous_docs"] = portable_repo_path(preserved, working_dir)
-        merge_into_metadata(working_dir, summary, prior_history=prior_history)
+        merge_into_metadata(
+            working_dir,
+            summary,
+            prior_history=prior_history or getattr(self, "_prior_update_history", None),
+        )
         try:
             record.save(working_dir)
         except OSError:
@@ -736,6 +775,39 @@ class CLIDocumentationGenerator:
 
         self.progress_tracker.complete_stage()
 
+    def _run_techdocs_generation(self):
+        """Export the docs as a Backstage TechDocs project (no LLM calls)."""
+        self.progress_tracker.start_stage(4, "TechDocs Export")
+
+        from codewiki.cli.techdocs_generator import detect_repo_url, generate_techdocs
+
+        try:
+            self.techdocs_result = generate_techdocs(
+                docs_dir=self.output_dir,
+                out_dir=self.techdocs_dir,
+                site_name=self.repo_path.name,
+                repo_url=detect_repo_url(str(self.repo_path)),
+            )
+        except (OSError, ValueError) as e:
+            # The docs are already written; a failed export must not fail the run
+            import click
+
+            click.secho(
+                f"⚠ TechDocs export failed: {e}\n"
+                f"  Retry with: codewiki techdocs {self.output_dir} {self.techdocs_dir}",
+                fg="yellow",
+                err=True,
+            )
+            self.progress_tracker.complete_stage()
+            return
+
+        if self.verbose:
+            self.progress_tracker.update_stage(
+                1.0, f"Wrote {self.techdocs_result.pages} pages to {self.techdocs_dir}"
+            )
+
+        self.progress_tracker.complete_stage()
+
     def _record_usage_statistics(self):
         """Copy the run's token and cost totals from the usage ledger into the job."""
         if self._usage_ledger is None:
@@ -743,6 +815,7 @@ class CLIDocumentationGenerator:
         summary = self._usage_ledger.summary()
         totals = summary["totals"]
         stats = self.job.statistics
+        stats.usage_report = summary
         stats.usage_totals = totals
         stats.total_tokens_used = int(
             sum(
@@ -750,14 +823,60 @@ class CLIDocumentationGenerator:
                 for k in (
                     "input_tokens",
                     "output_tokens",
-                    "cache_read_tokens",
-                    "cache_write_tokens",
                 )
             )
             or totals.get("total_tokens", 0)
         )
         stats.total_cost_usd = totals.get("cost_usd")
         stats.unpriced_models = summary["unpriced_models"]
+
+    def _finish_usage(self, incomplete: bool = False):
+        """Persist the final report even when validation or a later stage fails.
+
+        Reporting errors must never hide the original generation failure.
+        """
+        if self._usage_ledger is None:
+            return
+        self._usage_ledger.incomplete = incomplete
+        self._record_usage_statistics()
+        report = self.job.statistics.usage_report
+        try:
+            self.output_dir.mkdir(parents=True, exist_ok=True)
+            path = self.output_dir / "metadata.json"
+            try:
+                metadata = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                metadata = {}
+            if not isinstance(metadata, dict):
+                metadata = {}
+            metadata["usage"] = report
+            record = getattr(self, "_last_update_record", None)
+            if record is not None:
+                record.usage_report = report
+                record.save(str(self.output_dir))
+                summary = record.summary()
+                if getattr(self, "_preserved_docs_dir", None):
+                    # Relative, like _merge_update_summary: metadata is published with the docs.
+                    summary["previous_docs"] = portable_repo_path(
+                        self._preserved_docs_dir, str(self.output_dir)
+                    )
+                history = metadata.get("update_history", [])
+                if not isinstance(history, list):
+                    history = []
+                if history and history[-1].get("run_id") == record.run_id:
+                    history[-1] = summary
+                else:
+                    history.append(summary)
+                metadata.update(last_update=summary, update_history=history)
+            from codewiki.cli.utils.fs import safe_write
+
+            safe_write(path, json.dumps(metadata, indent=2, ensure_ascii=False))
+        except Exception:
+            logging.getLogger(__name__).warning("Could not save the run usage report")
+        if incomplete:
+            from codewiki.cli.utils.instructions import _echo_usage
+
+            _echo_usage({"usage_report": report, "provider": self.config.get("provider", "")})
 
     def _finalize_job(self):
         """Finalize the job (metadata already created by backend)."""

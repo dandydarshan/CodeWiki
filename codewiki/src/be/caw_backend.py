@@ -34,16 +34,22 @@ from codewiki._vendor.caw import Agent as CawAgent
 from codewiki._vendor.caw import ToolGroup
 
 from codewiki.src.be.agent_tools.deps import CodeWikiDeps
+from codewiki.src.be.agent_tools.doc_guard import DocumentationWriteError, doc_written
 from codewiki.src.be.backend import AgentReply, LLMBackend
-from codewiki.src.be.cluster_modules import format_potential_core_components
+from codewiki.src.be.module_scope import (
+    can_split_module,
+    complete_file_candidates,
+    validate_module_file_coverage,
+)
 from codewiki.src.be.dependency_analyzer.models.core import Node
 from codewiki.src.be.prompt_template import (
     format_leaf_system_prompt,
     format_system_prompt,
     format_user_prompt,
 )
-from codewiki.src.be.utils import count_tokens, is_complex_module, set_main_loop
+from codewiki.src.be.utils import set_main_loop
 from codewiki.src.be.doc_layout import config_layout, find_doc, module_doc_file
+from codewiki.src.be.overview_support import reusable_overview, root_recovery_prompt
 from codewiki.src.config import MODULE_TREE_FILENAME, OVERVIEW_FILENAME, Config
 from codewiki.src.utils import file_manager
 
@@ -518,37 +524,23 @@ class CawBackend(LLMBackend):
         # or a resume after a partial run silently skips every missing one.
         if not module_path:
             overview_docs_path = os.path.join(working_dir, OVERVIEW_FILENAME)
-            if os.path.exists(overview_docs_path):
+            if reusable_overview(overview_docs_path):
                 logger.info("✓ Overview docs already exists at %s", overview_docs_path)
                 return module_tree
         with shared.lock:
             docs_path = find_doc(working_dir, module_name, module_tree) if module_path else None
         if docs_path is None:
             docs_path = os.path.join(working_dir, f"{module_name}.md")
-        if os.path.exists(docs_path):
+        if os.path.isfile(docs_path) and (module_path or reusable_overview(docs_path)):
             logger.info("✓ Module docs already exists at %s", docs_path)
             return module_tree
 
         custom_instructions = config.get_prompt_addition()
+        if not module_path:
+            core_component_ids = complete_file_candidates(core_component_ids, components)
 
-        # Mirror PydanticAIBackend's early-cut: a module is only worth
-        # delegating to sub-agents when it spans multiple files AND has enough
-        # content to justify the cost AND we still have recursion budget.
-        # Without this gate the caw path would give every multi-file sub-module
-        # the recursive SYSTEM_PROMPT + delegation tool and fan out one extra
-        # agent call per sub-spec even when a single leaf write would suffice.
-        # See generate_sub_module_documentation_tool for the pydantic-ai
-        # equivalent.
-        _, components_with_code = format_potential_core_components(core_component_ids, components)
-        num_tokens = count_tokens(components_with_code)
-        can_delegate = (
-            is_complex_module(components, core_component_ids)
-            and start_depth < config.max_depth
-            and num_tokens >= config.max_token_per_leaf_module
-        )
-        logger.info(
-            f"Module {module_name} can delegate: {can_delegate} - is_complex_module: {is_complex_module(components, core_component_ids)} - start_depth: {start_depth} - num_tokens: {num_tokens} - max_depth: {config.max_depth} - max_token_per_leaf_module: {config.max_token_per_leaf_module}"
-        )
+        can_delegate = can_split_module(components, core_component_ids, config, start_depth)
+        logger.info("Module %s can delegate: %s (depth %d)", module_name, can_delegate, start_depth)
 
         if can_delegate:
             system_prompt = format_system_prompt(
@@ -571,6 +563,7 @@ class CawBackend(LLMBackend):
             current_depth=start_depth,
             config=config,
             custom_instructions=custom_instructions,
+            scope_component_ids=core_component_ids,
         )
 
         toolkit = CawToolKit(deps=deps, backend=self, allow_subagent=can_delegate)
@@ -592,6 +585,8 @@ class CawBackend(LLMBackend):
                 module_path=list(module_path),
                 layout=config_layout(config),
             )
+        if not module_path:
+            user_prompt = root_recovery_prompt(user_prompt, working_dir, module_name)
 
         # Each CLI session gets its own cwd (caw passes it to Popen) instead
         # of a process-wide os.chdir, which concurrent sessions would race on.
@@ -606,7 +601,11 @@ class CawBackend(LLMBackend):
         started = time.time()
         try:
             with slot:
-                traj = agent.completion(user_prompt, cwd=run_cwd)
+                try:
+                    traj = agent.completion(user_prompt, cwd=run_cwd)
+                finally:
+                    # Keep agent-inserted children resumable even if the run fails.
+                    shared.save(module_tree_path, deps.module_tree)
             # Nested sub-module agents are separate CLI processes that record
             # their own usage, so this covers only this module's own run.
             usage = self._record_usage(
@@ -631,6 +630,20 @@ class CawBackend(LLMBackend):
                 getattr(traj, "result", ""),
                 module_name,
             )
+            if not doc_written(working_dir, module_name, list(module_path), deps.module_tree):
+                doc_file = module_doc_file(module_name, list(module_path), config_layout(config))
+                logger.error(
+                    "Agent for %s finished without writing %s (turns=%d, tool_calls=%d). "
+                    "Final answer: %s",
+                    module_name,
+                    doc_file,
+                    traj.num_turns,
+                    traj.total_tool_calls,
+                    " ".join((getattr(traj, "result", None) or "").split())[:300] or "<empty>",
+                )
+                raise DocumentationWriteError(f"Agent for {module_name} has not written {doc_file}")
+            with shared.lock:
+                validate_module_file_coverage(deps.module_tree, components)
             shared.save(module_tree_path, deps.module_tree)
             return deps.module_tree
         except Exception as e:

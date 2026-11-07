@@ -53,7 +53,13 @@ def _deps(tmp_path) -> CodeWikiDeps:
         module_tree={},
         max_depth=2,
         current_depth=1,
-        config=SimpleNamespace(max_token_per_leaf_module=4000, agent_retries=3, request_limit=100),
+        config=SimpleNamespace(
+            min_token_per_module=1,
+            max_token_per_module=36369,
+            max_token_per_leaf_module=1,
+            agent_retries=3,
+            request_limit=100,
+        ),
         custom_instructions="",
     )
 
@@ -78,12 +84,8 @@ def test_repeat_request_is_skipped_not_suffixed(tmp_path):
     assert (tmp_path / "approval.md").exists() and (tmp_path / "billing.md").exists()
     assert set(deps.module_tree) == {"approval", "billing"}
 
-    # Round 2: same names again -> parent prefix, once (issue #76 behaviour).
-    _call(deps, specs)
-    assert (tmp_path / "overview_approval.md").exists()
-    assert (tmp_path / "overview_billing.md").exists()
-
-    # Round 3: plain and prefixed both exist -> skipped, nothing new anywhere.
+    # Repeating under parent-prefixed names must not assign the same files
+    # to a second leaf or run additional agents.
     files_before = sorted(p.name for p in tmp_path.iterdir())
     tree_before = dict(deps.module_tree)
     runs_before = len(FakeAgent.runs)
@@ -99,8 +101,16 @@ def test_mixed_batch_generates_only_new_names(tmp_path):
     deps = _deps(tmp_path)
     (tmp_path / "approval.md").write_text("old")
     (tmp_path / "overview_approval.md").write_text("old")
-    report = _call(deps, {"approval": ["a.py::fa"], "billing": ["b.py::fb"]})
+    deps.components["c.py::fc"] = _node("c.py::fc")
+    report = _call(
+        deps,
+        {
+            "approval": ["a.py::fa"],
+            "billing": ["b.py::fb"],
+            "shipping": ["c.py::fc"],
+        },
+    )
     assert (tmp_path / "billing.md").exists()
-    assert FakeAgent.runs == ["billing"]
+    assert FakeAgent.runs == ["billing", "shipping"]
     assert "billing.md" in report and "'approval'" in report and "Skipped" in report
-    assert set(deps.module_tree) == {"billing"}
+    assert set(deps.module_tree) == {"billing", "shipping"}

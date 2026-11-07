@@ -3,6 +3,7 @@ from collections import defaultdict
 from typing import Any
 
 from codewiki.src.be.doc_layout import doc_relpaths, module_doc_file
+from codewiki.src.be.mermaid_support import MERMAID_GUIDELINES
 from codewiki.src.config import LAYOUT_FLAT
 from codewiki.src.utils import file_manager
 
@@ -42,6 +43,7 @@ Generate documentation following this structure:
 1. Analyze the provided code components and module structure, explore the not given dependencies between the components if needed
 2. Create the main `{doc_file}` file with overview and architecture in working directory
 3. Use `generate_sub_module_documentation` to generate detailed sub-modules documentation for COMPLEX modules which at least have more than 1 code file and are able to clearly split into sub-modules. Sub-module names must be unique across the whole wiki ({uniqueness_reason}) — prefer names prefixed with the current module name, e.g. `{module_name}_search`
+   The tool enforces minimum module sizes and rejects partitions with fewer than two viable children. Small groups may be merged into siblings; use only the final pages reported by the tool. If delegation is rejected, document the code directly in the current page.
 4. Include relevant Mermaid diagrams throughout the documentation
 5. After all sub-modules are documented, adjust `{doc_file}` with ONLY ONE STEP to ensure all generated files including sub-modules documentation are properly cross-refered, using the final file names reported by `generate_sub_module_documentation`
 </WORKFLOW>
@@ -112,12 +114,13 @@ Provide `{repo_name}` repo structure:
 {repo_structure}
 </REPO_STRUCTURE>
 
-The core modules' documentation is NOT inlined above. Each top-level module carries a `docs_path` field with the absolute path to its documentation file — read those files with your file-reading tools before writing the overview (skip entries whose `docs_path` is null). When referencing a child's documentation, link it with the relative path in its `link` field, e.g. [alt text](<link>).
+Child documentation excerpts are supplied below as context. Some excerpts may be truncated or unavailable; use only the supplied evidence and do not invent missing details. No file-reading tools are available or needed. Link to child documentation using its relative `link` field, e.g. [alt text](<link>).
 
 Please generate the overview of the `{repo_name}` repository in markdown format with the following structure:
 <OVERVIEW>
 overview_content
 </OVERVIEW>
+Include a Markdown heading and explanatory prose. Return the finished page, without plans to read files or tool commands.
 """.strip()
 
 MODULE_OVERVIEW_PROMPT = """
@@ -133,21 +136,30 @@ Provide repo structure of the `{module_name}` module (marked with `is_target_for
 {repo_structure}
 </REPO_STRUCTURE>
 
-The child modules' documentation is NOT inlined above. Each child of the target module carries a `docs_path` field with the absolute path to its documentation file — read those files with your file-reading tools before writing the overview (skip entries whose `docs_path` is null). When referencing a child's documentation, link it with the relative path in its `link` field, e.g. [alt text](<link>).
+Child documentation excerpts are supplied below as context. Some excerpts may be truncated or unavailable; use only the supplied evidence and do not invent missing details. No file-reading tools are available or needed. Link to child documentation using its relative `link` field, e.g. [alt text](<link>).
 
 Please generate the overview of the `{module_name}` module in markdown format with the following structure:
 <OVERVIEW>
 overview_content
 </OVERVIEW>
+Include a Markdown heading and explanatory prose. Return the finished page, without plans to read files or tool commands.
 """.strip()
 
+# These templates are formatted later; braces in literal Mermaid labels must
+# survive that formatting exactly once.
+_MERMAID_TEMPLATE_GUIDANCE = MERMAID_GUIDELINES.replace("{", "{{").replace("}", "}}")
+SYSTEM_PROMPT += "\n\n" + _MERMAID_TEMPLATE_GUIDANCE
+LEAF_SYSTEM_PROMPT += "\n\n" + _MERMAID_TEMPLATE_GUIDANCE
+REPO_OVERVIEW_PROMPT += "\n\n" + _MERMAID_TEMPLATE_GUIDANCE
+MODULE_OVERVIEW_PROMPT += "\n\n" + _MERMAID_TEMPLATE_GUIDANCE
+
 CLUSTER_REPO_PROMPT = """
-Here is list of all potential core components of the repository (It's normal that some components are not essential to the repository):
+Here are the core entry points of the repository, grouped by source file:
 <POTENTIAL_CORE_COMPONENTS>
 {potential_core_components}
 </POTENTIAL_CORE_COMPONENTS>
 
-Please group the components into groups such that each group is a set of components that are closely related to each other and together they form a module. DO NOT include components that are not essential to the repository.
+Group related source files into modules. Assign EVERY provided component ID exactly once. All IDs from the same file must stay together in one module. Each file represents its entire implementation, including methods and functions absent from this entry-point list. A `__file__` entry represents a source file without indexed symbols; include it too.
 
 Files marked `(artifact: <class>)` are build, CI, container, packaging, manifest, configuration, schema or script files. Their components describe how the system is built, packaged, shipped, configured and tested. They ARE essential: group them into a dedicated build/deployment/configuration module, or attach them to the module they configure. Never drop them.
 
@@ -184,12 +196,12 @@ Here is the module tree of a repository:
 {module_tree}
 </MODULE_TREE>
 
-Here is list of all potential core components of the module {module_name} (It's normal that some components are not essential to the module):
+Here are the core entry points of the module {module_name}, grouped by source file:
 <POTENTIAL_CORE_COMPONENTS>
 {potential_core_components}
 </POTENTIAL_CORE_COMPONENTS>
 
-Please group the components into groups such that each group is a set of components that are closely related to each other and together they form a smaller module. DO NOT include components that are not essential to the module.
+Group related source files into smaller modules. Assign EVERY provided component ID exactly once. All IDs from the same file must stay together in one module. Each file represents its entire implementation, including methods and functions absent from this entry-point list. A `__file__` entry represents a source file without indexed symbols; include it too.
 
 Files marked `(artifact: <class>)` are build, CI, container, packaging, manifest, configuration, schema or script files. Their components describe how the system is built, packaged, shipped, configured and tested. They ARE essential: group them into a dedicated build/deployment/configuration module, or attach them to the module they configure. Never drop them.
 
@@ -387,6 +399,9 @@ EXTENSION_TO_LANGUAGE = {
     ".sc": "scala",
     ".rs": "rust",
     ".dart": "dart",
+    ".go": "go",
+    ".zig": "zig",
+    ".vue": "vue",
     ".php": "php",
     ".phtml": "php",
     ".inc": "php",
@@ -776,16 +791,3 @@ def format_overview_system_prompt(custom_instructions: str | None = None) -> str
         "Follow these instructions when writing the overview; they take precedence over "
         "conflicting defaults in the request (language, audience, structure, style)."
     )
-
-
-_OVERVIEW_PYDANTIC_TOOL_GUIDANCE = (
-    "Use the read_module_documentation tool to load every non-null docs_path listed "
-    "in REPO_STRUCTURE before writing the overview."
-)
-
-
-def append_pydantic_overview_tool_guidance(base: str | None) -> str:
-    """Custom-instructions system text plus pydantic-ai overview tool guidance."""
-    if base:
-        return f"{base}\n\n{_OVERVIEW_PYDANTIC_TOOL_GUIDANCE}"
-    return _OVERVIEW_PYDANTIC_TOOL_GUIDANCE

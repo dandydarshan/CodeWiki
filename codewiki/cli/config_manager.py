@@ -144,8 +144,12 @@ class ConfigManager:
         aws_region: Optional[str] = None,
         api_version: Optional[str] = None,
         azure_deployment: Optional[str] = None,
+        google_project: Optional[str] = None,
+        google_location: Optional[str] = None,
         use_gitignore: Optional[bool] = None,
         prompt_caching: Optional[bool] = None,
+        pricing: Optional[dict] = None,
+        min_token_per_module: Optional[int] = None,
     ):
         """
         Save configuration to file and keyring.
@@ -158,6 +162,7 @@ class ConfigManager:
             fallback_model: Fallback model
             default_output: Default output directory
             max_tokens: Maximum tokens for LLM response
+            min_token_per_module: Minimum code tokens for a standalone module
             max_token_per_module: Maximum tokens per module for clustering
             max_token_per_leaf_module: Maximum tokens per leaf module
             max_depth: Maximum depth for hierarchical decomposition
@@ -169,6 +174,8 @@ class ConfigManager:
             aws_region: AWS region for Bedrock provider
             api_version: Azure OpenAI API version
             azure_deployment: Azure OpenAI deployment name
+            google_project: Google Cloud project for google-vertex
+            google_location: Vertex AI location for google-vertex
             use_gitignore: Apply Git ignore rules during repository analysis
             prompt_caching: Add prompt-cache breakpoints to agentic LLM calls
         """
@@ -194,7 +201,19 @@ class ConfigManager:
                     agent_instructions=AgentInstructions(),
                 )
 
+        from codewiki.src.be.backend import is_caw_provider, is_google_provider, needs_base_url
+
+        was_google = is_google_provider(self._config.provider)
+
         # Update fields if provided
+        if pricing is not None:
+            from codewiki.src.be.pricing import validate_pricing
+
+            try:
+                validate_pricing(pricing)
+            except ValueError as exc:
+                raise ConfigurationError(str(exc)) from exc
+            self._config.pricing = pricing
         if base_url is not None:
             self._config.base_url = base_url
         if main_model is not None:
@@ -207,6 +226,14 @@ class ConfigManager:
             self._config.default_output = default_output
         if max_tokens is not None:
             self._config.max_tokens = max_tokens
+        if min_token_per_module is not None:
+            from codewiki.src.config import validate_min_module_tokens
+
+            try:
+                validate_min_module_tokens(min_token_per_module)
+            except ValueError as exc:
+                raise ConfigurationError(str(exc)) from exc
+            self._config.min_token_per_module = min_token_per_module
         if max_token_per_module is not None:
             self._config.max_token_per_module = max_token_per_module
         if max_token_per_leaf_module is not None:
@@ -229,6 +256,10 @@ class ConfigManager:
             self._config.api_version = api_version
         if azure_deployment is not None:
             self._config.azure_deployment = azure_deployment
+        if google_project is not None:
+            self._config.google_project = google_project
+        if google_location is not None:
+            self._config.google_location = google_location
         if use_gitignore is not None:
             self._config.use_gitignore = use_gitignore
         if prompt_caching is not None:
@@ -238,12 +269,29 @@ class ConfigManager:
         # Caw providers only need main_model; API providers need base_url +
         # cluster_model on top of that.  The validate() method itself routes
         # by provider, so we only gate on whether enough is set to validate.
-        from codewiki.src.be.backend import is_caw_provider
+
+        # The glm-4p5 default fallback does not exist on Google endpoints; a
+        # fallback that 404s only after the main model failed hides the real error.
+        if (
+            is_google_provider(self._config.provider)
+            and self._config.main_model
+            and self._config.fallback_model in ("", "glm-4p5")
+        ):
+            self._config.fallback_model = self._config.main_model
+        # Leaving Google: the Gemini fallback set above would 404 on the new endpoint.
+        elif (
+            was_google and not is_google_provider(self._config.provider) and fallback_model is None
+        ):
+            self._config.fallback_model = "glm-4p5"
 
         if is_caw_provider(self._config.provider):
             if self._config.main_model:
                 self._config.validate()
-        elif self._config.base_url and self._config.main_model and self._config.cluster_model:
+        elif (
+            (self._config.base_url or not needs_base_url(self._config.provider))
+            and self._config.main_model
+            and self._config.cluster_model
+        ):
             self._config.validate()
 
         # Save API key to keyring, falling back to file
@@ -304,7 +352,8 @@ class ConfigManager:
         Check if configuration is complete and valid.
 
         Subscription-mode providers (claude-code, codex) do not require an
-        API key — they authenticate via the underlying CLI's OAuth.
+        API key — they authenticate via the underlying CLI's OAuth, and
+        google-vertex uses Google credentials.
 
         Returns:
             True if configured, False otherwise
@@ -312,9 +361,9 @@ class ConfigManager:
         if self._config is None:
             return False
 
-        from codewiki.src.be.backend import is_caw_provider
+        from codewiki.src.be.backend import needs_api_key
 
-        if not is_caw_provider(self._config.provider):
+        if needs_api_key(self._config.provider):
             # Check if API key is set
             if self.get_api_key() is None:
                 return False

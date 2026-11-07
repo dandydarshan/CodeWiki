@@ -8,8 +8,10 @@ Supports multiple providers: openai-compatible, anthropic, bedrock, azure-openai
 google (Gemini API) and google-vertex (Vertex AI).
 """
 
+import hashlib
 import inspect
 import logging
+import re
 import time
 from types import SimpleNamespace
 from typing import Optional
@@ -191,6 +193,7 @@ class CachingOpenAIModel(CompatibleOpenAIModel):
             # Breakpoint 2: final message (covers the whole conversation prefix).
             if openai_messages:
                 _add_cache_control_to_message(openai_messages[-1])
+        _portable_tool_call_ids(openai_messages)
         return openai_messages
 
     def _input_budget(self, model_settings) -> int:
@@ -300,6 +303,35 @@ def _add_response_hook(http_client, hook) -> None:
         http_client.event_hooks = {**hooks, "response": [*response_hooks, hook]}
 
 
+_PORTABLE_ID = re.compile(r"[A-Za-z0-9_-]{1,64}")
+
+
+def _portable_id(call_id: str) -> str:
+    """``call_id`` in the form every provider accepts (Bedrock: ``^[a-zA-Z0-9_-]+$``)."""
+    if _PORTABLE_ID.fullmatch(call_id):
+        return call_id
+    digest = hashlib.sha1(call_id.encode("utf-8")).hexdigest()[:10]  # keeps mapped ids distinct
+    return re.sub(r"[^A-Za-z0-9_-]", "_", call_id)[:50] + "_" + digest
+
+
+def _portable_tool_call_ids(messages: list) -> None:
+    """Rewrite tool-call ids in place so a fallback model can read the history.
+
+    Ids come from whichever model made the call: Kimi-style ``functions.read:0``
+    is rejected by Bedrock ("tool_use.id: String should match pattern"), so a
+    fallback after such a primary failed on its first request. The call and its
+    result are mapped the same way.
+    """
+    for message in messages:
+        if not isinstance(message, dict):
+            continue
+        for call in message.get("tool_calls") or ():
+            if isinstance(call, dict) and isinstance(call.get("id"), str):
+                call["id"] = _portable_id(call["id"])
+        if isinstance(message.get("tool_call_id"), str):
+            message["tool_call_id"] = _portable_id(message["tool_call_id"])
+
+
 class _ThrottleAwareProvider(OpenAIProvider):
     """OpenAIProvider whose HTTP client (also a re-created one) reports 429s."""
 
@@ -358,18 +390,32 @@ def _windowed(model: Model, config: Config) -> Model:
     return _WindowedModel(model, budget) if budget else model
 
 
-def create_main_model(config: Config) -> Model:
-    """Create the main LLM model from configuration."""
+def create_main_model(config: Config, *, max_retries: int | None = None) -> Model:
+    """Create the main LLM model from configuration.
+
+    ``max_retries`` overrides the OpenAI client's retries (2), each of which can wait the
+    full 600 s read timeout.
+    """
     if is_google_provider(getattr(config, "provider", "")):
         from codewiki.src.be.google_provider import create_google_model
 
         return _windowed(create_google_model(config, config.main_model), config)
+    if max_retries is None:
+        provider = _ThrottleAwareProvider(base_url=config.llm_base_url, api_key=config.llm_api_key)
+    else:
+        from openai import AsyncOpenAI
+
+        provider = _ThrottleAwareProvider(
+            openai_client=AsyncOpenAI(
+                base_url=config.llm_base_url, api_key=config.llm_api_key, max_retries=max_retries
+            )
+        )
     return CachingOpenAIModel(
         model_name=config.main_model,
         prompt_caching=config.prompt_caching,
         cache_registry_key=config.llm_base_url or "",
         context_window=getattr(config, "max_context_tokens", 0),
-        provider=_ThrottleAwareProvider(base_url=config.llm_base_url, api_key=config.llm_api_key),
+        provider=provider,
         settings=_build_model_settings(config, config.main_model),
     )
 
@@ -394,7 +440,12 @@ def create_fallback_models(config: Config) -> FallbackModel:
     """Create fallback models chain from configuration."""
     from codewiki.src.be.api_usage import UsageModel
 
-    main = UsageModel(create_main_model(config), config.main_model)
+    # A different fallback model is the retry: a primary that hangs should reach it after
+    # one read timeout, not three (a user's module waited 38 min before falling back).
+    distinct = bool(config.fallback_model) and config.fallback_model != config.main_model
+    main = UsageModel(
+        create_main_model(config, max_retries=0 if distinct else None), config.main_model
+    )
     fallback = UsageModel(create_fallback_model(config), config.fallback_model)
     # The default fallback_on (ModelAPIError, or ModelHTTPError on older pydantic-ai)
     # misses UnexpectedModelBehavior, which pydantic-ai raises for a 200 response whose

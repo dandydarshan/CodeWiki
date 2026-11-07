@@ -52,9 +52,7 @@ def _history() -> list:
 
 
 def _map(model: CachingOpenAIModel) -> list:
-    return asyncio.run(
-        model._map_messages(_history(), ModelRequestParameters())
-    )
+    return asyncio.run(model._map_messages(_history(), ModelRequestParameters()))
 
 
 def test_map_messages_adapts_to_all_base_signatures():
@@ -73,9 +71,7 @@ def test_map_messages_adapts_to_all_base_signatures():
         calls.append(("two", messages, model_request_parameters))
         return []
 
-    async def three_arguments(
-        self, messages, model_request_parameters, *, model_settings=None
-    ):
+    async def three_arguments(self, messages, model_request_parameters, *, model_settings=None):
         calls.append(("three", messages, model_request_parameters, model_settings))
         return []
 
@@ -170,7 +166,9 @@ def test_400_disables_caching_and_retries_without_markers():
     async def fake_create(self, messages, stream, model_settings, model_request_parameters):
         calls.append(self._prompt_caching_active)
         if self._prompt_caching_active:
-            raise ModelHTTPError(status_code=400, model_name=self.model_name, body="bad cache_control")
+            raise ModelHTTPError(
+                status_code=400, model_name=self.model_name, body="bad cache_control"
+            )
         return "ok"
 
     original = OpenAIChatModel._completions_create
@@ -249,3 +247,46 @@ if __name__ == "__main__":
             fn()
             print(f"PASS {name}")
     print("All prompt caching tests passed.")
+
+
+def test_tool_call_ids_are_portable_for_a_fallback_model():
+    # A Kimi-style id from the primary model; Bedrock (the fallback) rejects it with
+    # "tool_use.id: String should match pattern '^[a-zA-Z0-9_-]+$'".
+    history = _history()
+    history[1].parts[0].tool_call_id = "functions.read_code_components:0"
+    history[2].parts[0].tool_call_id = "functions.read_code_components:0"
+    history.append(
+        ModelResponse(parts=[ToolCallPart(tool_name="x", args="{}", tool_call_id="functions.x:1")])
+    )
+    for caching in (True, False):
+        messages = asyncio.run(
+            _make_model(caching)._map_messages(history, ModelRequestParameters())
+        )
+        call_ids = [c["id"] for m in messages for c in (m.get("tool_calls") or [])]
+        result_ids = [m["tool_call_id"] for m in messages if m.get("role") == "tool"]
+        assert all(llm_services._PORTABLE_ID.fullmatch(i) for i in call_ids + result_ids)
+        assert result_ids[0] == call_ids[0]  # the call and its result still match
+        assert len(set(call_ids)) == 2  # distinct ids stay distinct
+    assert llm_services._portable_id("call_1") == "call_1"  # valid ids are left alone
+
+
+def test_primary_is_not_retried_when_a_different_fallback_exists(monkeypatch):
+    from codewiki.src.config import Config
+
+    def config(fallback):
+        return Config.from_cli(
+            repo_path=".",
+            output_dir="out",
+            llm_base_url="http://localhost:1/v1",
+            llm_api_key="k",
+            main_model="primary",
+            cluster_model="primary",
+            fallback_model=fallback,
+        )
+
+    def retries(cfg):
+        chain = llm_services.create_fallback_models(cfg)
+        return [m.wrapped.client.max_retries for m in chain.models]
+
+    assert retries(config("other")) == [0, 2]  # the fallback is the retry
+    assert retries(config("primary")) == [2, 2]  # same model: keep the client's retries

@@ -147,8 +147,8 @@ def _resolve_repo(docs_dir: str, repo_path: str | None, graph_files: set[str]) -
     if repo_path:
         candidates.append(repo_path)
     recorded = read_generation_info(docs_dir).get("repo_path")
-    if recorded:
-        candidates.append(recorded)
+    if recorded:  # relative to the docs dir since paths stopped being published; old docs: absolute
+        candidates.append(os.path.normpath(os.path.join(os.path.abspath(docs_dir), recorded)))
     candidates.append(os.path.dirname(os.path.abspath(docs_dir)))
     sample = sorted(graph_files)[:20]
     for cand in candidates:

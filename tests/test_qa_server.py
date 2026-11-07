@@ -302,3 +302,37 @@ def test_missing_graph_is_rebuilt_from_the_repo(tmp_path):
     shutil.rmtree(docs_dir / "temp")  # a fresh clone: docs/temp/ is git-ignored
     index = QAIndex(str(docs_dir))
     assert index.code, "code search is off without a graph"
+
+
+# ------------------------------------------------- no local paths in published files
+
+
+def test_repo_path_is_recorded_relative_to_the_docs(tmp_path, monkeypatch):
+    import os
+
+    from codewiki.src.utils import portable_repo_path
+
+    repo = tmp_path / "repo"
+    assert portable_repo_path(str(repo), str(repo / "docs")) == ".."
+    assert portable_repo_path(str(repo), str(repo / "site" / "docs")) == "../.."
+
+    def other_drive(*a):
+        raise ValueError("path is on mount 'D:', start on mount 'C:'")
+
+    monkeypatch.setattr(os.path, "relpath", other_drive)
+    assert portable_repo_path("D:/repo", "C:/docs") is None  # Windows: nothing recorded
+
+
+def test_serve_finds_the_repo_from_a_relative_or_an_old_absolute_path(tmp_path):
+    import json
+    import shutil
+
+    repo, docs = build(tmp_path)
+    elsewhere = tmp_path / "published" / "docs"  # docs copied away from the repo
+    shutil.copytree(docs, elsewhere)
+    meta_path = elsewhere / "metadata.json"
+    meta = json.loads(meta_path.read_text())
+    for recorded in ("../../repo", str(repo)):  # new relative form, and docs from older versions
+        meta["generation_info"]["repo_path"] = recorded
+        meta_path.write_text(json.dumps(meta))
+        assert QAIndex(str(elsewhere)).repo_path == str(repo.resolve()), recorded

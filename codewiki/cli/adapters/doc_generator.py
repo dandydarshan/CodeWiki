@@ -25,6 +25,7 @@ from codewiki.src.be.doc_layout import list_doc_files
 from codewiki.src.config import DEFAULT_CONCURRENCY, DEFAULT_LAYOUT
 from codewiki.src.config import Config as BackendConfig
 from codewiki.src.config import set_cli_context
+from codewiki.src.utils import portable_repo_path
 
 
 def _generated_files(working_dir: str) -> list[str]:
@@ -522,7 +523,7 @@ class CLIDocumentationGenerator:
         revision = {
             "old_commit": self._docs_commit(),
             "new_commit": self.commit_id,
-            "repo_path": str(self.repo_path),
+            "repo_path": portable_repo_path(str(self.repo_path), str(self.output_dir)),
         }
         updater = IncrementalUpdater(
             backend_config, doc_generator.backend, doc_generator, update_opts
@@ -606,7 +607,13 @@ class CLIDocumentationGenerator:
                 history = (json.load(f) or {}).get("update_history")
         except (OSError, json.JSONDecodeError):
             return []
-        return history if isinstance(history, list) else []
+        if not isinstance(history, list):
+            return []
+        for entry in history:  # entries written before absolute paths stopped being published
+            rev = entry.get("revision") if isinstance(entry, dict) else None
+            if isinstance(rev, dict) and os.path.isabs(str(rev.get("repo_path") or "")):
+                rev["repo_path"] = portable_repo_path(rev["repo_path"], working_dir)
+        return history
 
     def _merge_update_summary(self, working_dir: str, prior_history: list | None = None) -> None:
         record = getattr(self, "_last_update_record", None)
@@ -617,7 +624,7 @@ class CLIDocumentationGenerator:
         summary = record.summary()
         preserved = getattr(self, "_preserved_docs_dir", None)
         if preserved:
-            summary["previous_docs"] = preserved
+            summary["previous_docs"] = portable_repo_path(preserved, working_dir)
         merge_into_metadata(working_dir, summary, prior_history=prior_history)
         try:
             record.save(working_dir)

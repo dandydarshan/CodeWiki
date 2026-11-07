@@ -44,7 +44,7 @@ from codewiki.src.config import (
     OVERVIEW_FILENAME,
     Config,
 )
-from codewiki.src.utils import file_manager
+from codewiki.src.utils import file_manager, portable_repo_path
 
 # Configure logging and monitoring
 logger = logging.getLogger(__name__)
@@ -100,7 +100,9 @@ class DocumentationGenerator:
                 "provider": getattr(self.config, "provider", None),
                 "main_model": self.config.main_model,
                 "generator_version": __version__,
-                "repo_path": self.config.repo_path,
+                # Relative to the docs dir: an absolute path would publish the checkout's
+                # location (C:/Users/<name>/...) with the docs. `serve` resolves it back.
+                "repo_path": portable_repo_path(self.config.repo_path, working_dir),
                 "commit_id": self.commit_id,
                 # Read back by `--update` so updated pages keep this language
                 "language": getattr(self.config, "language", None),

@@ -150,6 +150,8 @@ class LeafAgentRunner:
         except Exception as e:  # noqa: BLE001 — recorded, the run continues
             err = f"{type(e).__name__}: {e}"
             logger.error("Update agent for %s failed: %s", leaf_name, e)
+            # A failed agent returns no verdicts; without this its pages read as "no-op".
+            self.record.errors.append(f"leaf {leaf_name}: {err}")
         seconds = time.time() - started
         self.record.add_call(CallCost(kind, leaf_name, seconds, usage, err))
         after = P.page_hashes(self.docs_dir)
@@ -162,9 +164,9 @@ class LeafAgentRunner:
             on_disk = stem in changed
             if v is None:
                 verdict = "patch" if on_disk else "no-op"
-                reason = "no verdict returned by agent" + (
-                    " (page changed on disk)" if on_disk else ""
-                )
+                reason = (
+                    f"update agent failed: {err}" if err else "no verdict returned by agent"
+                ) + (" (page changed on disk)" if on_disk else "")
             else:
                 verdict, reason = v["verdict"], v["reason"]
                 if verdict not in ("no-op", "patch", "rewrite"):

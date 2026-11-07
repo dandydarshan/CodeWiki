@@ -83,6 +83,15 @@ uses [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- **Upgrading from 2.0 docs failed.** Module trees saved by 2.0.x do not
+  cover every file 2.1's analysis finds (dotfiles, CI files), so a resumed
+  `generate` failed every new page and `--update` could not generate missing
+  pages. A saved tree is now fitted to the current code when a run starts:
+  files it does not cover join the nearest module, removed components leave
+  it.
+- **A failed `--update` agent was reported as success.** Its pages read as
+  "no-op" and the run said "generated successfully". The failure is now a run
+  error, and `--update` prints a run's errors.
 - Ask AI cited the wrong source lines: code is now read with its line numbers.
 - An empty `old_str` in the editor crashed the agent and failed its module.
 - A failed agent's half-written page counted as done on resume, so the module

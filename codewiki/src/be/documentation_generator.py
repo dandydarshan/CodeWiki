@@ -35,6 +35,7 @@ from codewiki.src.be.module_naming import (
 )
 from codewiki.src.be.module_scope import (
     complete_file_candidates,
+    fit_saved_trees,
     get_module_token_count,
     validate_module_file_coverage,
 )
@@ -579,6 +580,8 @@ class DocumentationGenerator:
         try:
             # Build dependency graph
             components, leaf_nodes = self.graph_builder.build_dependency_graph()
+            # Trees saved by an older CodeWiki may not cover every file the analysis finds now.
+            fit_saved_trees(os.path.abspath(self.config.docs_dir), components)
 
             logger.debug(f"Found {len(leaf_nodes)} leaf nodes")
             # logger.debug(f"Leaf nodes:\n{'\n'.join(sorted(leaf_nodes)[:200])}")

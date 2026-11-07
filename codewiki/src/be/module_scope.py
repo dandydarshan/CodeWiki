@@ -268,6 +268,87 @@ def module_file_owners(tree: dict[str, Any], components: dict[str, Node]) -> dic
     return dict(owners)
 
 
+def fit_tree_to_code(tree: dict[str, Any], components: dict[str, Node]) -> tuple[int, int]:
+    """Adapt a saved module tree to the current code, in place.
+
+    A tree from an older CodeWiki (or from before files were added) misses files the
+    analysis now finds, and may list components that are gone; either fails
+    validate_module_file_coverage. Files it does not own join the nearest leaf
+    (nearest_module); components no longer in the code leave it. Returns
+    (files adopted, component ids dropped). {} (one-page mode) is left alone.
+    """
+    if not tree:
+        return 0, 0
+    dropped = 0
+
+    def prune(level: dict[str, Any]) -> None:
+        nonlocal dropped
+        for info in level.values():
+            ids = info.get("components") or []
+            kept = [cid for cid in ids if cid in components]
+            dropped += len(ids) - len(kept)
+            info["components"] = kept
+            prune(info.get("children") or {})
+
+    prune(tree)
+    missing = (
+        component_files(list(components), components) - module_file_owners(tree, components).keys()
+    )
+    leaves: dict[str, dict[str, Any]] = {}
+
+    def collect(level: dict[str, Any], parent: tuple[str, ...]) -> None:
+        for name, info in level.items():
+            if info.get("children"):
+                collect(info["children"], (*parent, name))
+            else:
+                leaves["/".join((*parent, name))] = info
+
+    collect(tree, ())
+    if not missing or not leaves:
+        return 0, dropped
+    groups = {
+        name: component_files(info["components"], components) for name, info in leaves.items()
+    }
+    loads = {name: get_module_token_count(components, files) for name, files in groups.items()}
+    by_file: dict[str, list[str]] = defaultdict(list)
+    for cid, node in components.items():
+        if node.relative_path in missing:
+            by_file[node.relative_path].append(cid)
+    for path in sorted(missing):
+        target = nearest_module({path}, groups, loads)
+        leaves[target]["components"].extend(sorted(by_file[path]))
+        groups[target].add(path)
+        loads[target] += get_module_token_count(components, {path})
+    return len(missing), dropped
+
+
+def fit_saved_trees(docs_dir: str, components: dict[str, Node]) -> None:
+    """Fit the module trees saved in ``docs_dir`` to the current code before a run reuses them."""
+    import os
+
+    from codewiki.src.config import FIRST_MODULE_TREE_FILENAME, MODULE_TREE_FILENAME
+    from codewiki.src.utils import file_manager
+
+    for name in (FIRST_MODULE_TREE_FILENAME, MODULE_TREE_FILENAME):
+        path = os.path.join(docs_dir, name)
+        if not os.path.isfile(path):
+            continue
+        tree = file_manager.load_json(path)
+        if not isinstance(tree, dict):
+            continue
+        adopted, dropped = fit_tree_to_code(tree, components)
+        if adopted or dropped:
+            file_manager.save_json(tree, path)
+            logger.info(
+                "%s: %d file(s) the saved tree did not cover joined the nearest module, "
+                "%d component(s) no longer in the code left it. Their pages are not "
+                "rewritten; run with --no-cache to document them from scratch.",
+                name,
+                adopted,
+                dropped,
+            )
+
+
 def validate_module_file_coverage(
     tree: dict[str, Any],
     components: dict[str, Node],

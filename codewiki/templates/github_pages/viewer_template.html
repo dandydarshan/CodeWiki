@@ -3493,8 +3493,9 @@
 
         function chatCandidates() {
             const out = [];
-            // Served by `codewiki serve` itself: same origin, no cross-site request.
-            if (location.protocol === 'http:' || location.protocol === 'https:') out.push(location.origin);
+            // Served by `codewiki serve` itself (it marks the page): same origin, no cross-site
+            // request. Elsewhere, e.g. GitHub Pages, /api/health on this origin is only a 404.
+            if (document.querySelector('meta[name="codewiki-serve"]')) out.push(location.origin);
             (CHAT_CONFIG.endpoints || ['http://127.0.0.1:8765']).forEach(function(e) {
                 const base = String(e).replace(/\/+$/, '');
                 if (out.indexOf(base) === -1) out.push(base);

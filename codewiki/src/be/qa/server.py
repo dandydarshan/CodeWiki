@@ -16,13 +16,20 @@ import asyncio
 import json
 import logging
 import os
+import re
 import socket
 import threading
 from collections.abc import Iterable
 from urllib.parse import urlparse
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
+from fastapi.responses import (
+    FileResponse,
+    HTMLResponse,
+    JSONResponse,
+    Response,
+    StreamingResponse,
+)
 from pydantic import BaseModel, Field
 
 from codewiki import __version__
@@ -34,6 +41,7 @@ logger = logging.getLogger(__name__)
 
 # Never served: the dependency graph / caches under temp/ and dotfiles.
 _HIDDEN_PREFIXES = ("temp/", ".")
+SERVE_MARKER = '<meta name="codewiki-serve" content="1">'
 
 
 class AskRequest(BaseModel):
@@ -241,6 +249,19 @@ def create_app(
         full = os.path.realpath(os.path.join(docs_dir, rel))
         if not full.startswith(os.path.realpath(docs_dir) + os.sep) or not os.path.isfile(full):
             raise HTTPException(404)
+        if full.endswith(".html"):
+            # Tell the page it is served by `codewiki serve`, so its chat uses this origin.
+            # Elsewhere (GitHub Pages) probing the own origin's /api/health only 404s.
+            with open(full, encoding="utf-8") as f:
+                html = f.read()
+            html = re.sub(
+                r"<head(?:\s[^>]*)?>",
+                lambda m: m.group(0) + SERVE_MARKER,
+                html,
+                count=1,
+                flags=re.I,
+            )
+            return HTMLResponse(html)
         return FileResponse(full)
 
     return app

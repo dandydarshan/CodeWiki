@@ -336,3 +336,20 @@ def test_serve_finds_the_repo_from_a_relative_or_an_old_absolute_path(tmp_path):
         meta["generation_info"]["repo_path"] = recorded
         meta_path.write_text(json.dumps(meta))
         assert QAIndex(str(elsewhere)).repo_path == str(repo.resolve()), recorded
+
+
+def test_serve_marks_the_pages_it_serves(tmp_path):
+    """The docs site probes its own origin's /api/health only when `codewiki serve` served it;
+    on GitHub Pages that probe was always a 404 in the console."""
+    _, docs_dir = build(tmp_path)
+    (docs_dir / "index.html").write_text(
+        "<html><head lang=en><title>t</title></head><body><header>x</header>"
+    )
+    c = TestClient(create_app(str(docs_dir), set()))
+    html = c.get("/").text
+    assert html.count('name="codewiki-serve"') == 1
+    assert html.index('name="codewiki-serve"') < html.index(
+        "<title>"
+    )  # inside <head>, not <header>
+    page = c.get("/overview.md")
+    assert "codewiki-serve" not in page.text and page.status_code == 200

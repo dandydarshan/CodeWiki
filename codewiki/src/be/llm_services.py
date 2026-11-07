@@ -310,7 +310,7 @@ def _portable_id(call_id: str) -> str:
     """``call_id`` in the form every provider accepts (Bedrock: ``^[a-zA-Z0-9_-]+$``)."""
     if _PORTABLE_ID.fullmatch(call_id):
         return call_id
-    digest = hashlib.sha1(call_id.encode("utf-8")).hexdigest()[:10]  # keeps mapped ids distinct
+    digest = hashlib.sha256(call_id.encode("utf-8")).hexdigest()[:10]  # keeps mapped ids distinct
     return re.sub(r"[^A-Za-z0-9_-]", "_", call_id)[:50] + "_" + digest
 
 

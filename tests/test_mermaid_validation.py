@@ -289,10 +289,13 @@ def _fresh_probe(monkeypatch, returncode):
 
 
 @pytest.mark.parametrize("returncode", [-11, 0xC0000005])  # segfault; Windows access violation
-def test_crashing_pythonmonkey_falls_back_without_parsing_in_process(monkeypatch, returncode):
+def test_crashing_pythonmonkey_falls_back_without_parsing_in_process(
+    monkeypatch, caplog, returncode
+):
     """Python 3.14.0-3.14.3: PythonMonkey's wheels crash the process on the first parse
     (PythonMonkey issue #515). The probe sees it in a child, so CodeWiki uses Node."""
     runs = _fresh_probe(monkeypatch, returncode)
+    caplog.set_level("WARNING")
 
     async def must_not_run(source):
         pytest.fail("PythonMonkey must not parse in-process after a crashing probe")
@@ -302,6 +305,8 @@ def test_crashing_pythonmonkey_falls_back_without_parsing_in_process(monkeypatch
     assert utils._PYTHONMONKEY_BROKEN
     asyncio.run(utils._try_pythonmonkey_parse("flowchart TD\n  A --> B\n"))
     assert len(runs) == 1  # probed once, not per diagram
+    warnings = [r.getMessage() for r in caplog.records if r.levelname == "WARNING"]
+    assert len(warnings) == 1 and "Upgrade Python" in warnings[0], warnings
 
 
 def test_python_error_in_probe_is_not_a_crash(monkeypatch):

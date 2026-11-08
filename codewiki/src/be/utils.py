@@ -233,7 +233,7 @@ async def _try_pythonmonkey_parse(diagram_content: str) -> str | None:
     PythonMonkey itself is unusable (failed import or lost event loop) so the
     caller can fall back to system Node.js.
     """
-    global _PYTHONMONKEY_BROKEN
+    global _PYTHONMONKEY_BROKEN, _pm_unavailable_warned
     if _PYTHONMONKEY_BROKEN:
         _warn_pythonmonkey_unavailable_once()
         return None
@@ -251,7 +251,7 @@ async def _try_pythonmonkey_parse(diagram_content: str) -> str | None:
         return None
     if not await _run_in_daemon_thread(_pythonmonkey_probe_passes):
         _PYTHONMONKEY_BROKEN = True
-        _warn_pythonmonkey_unavailable_once()
+        _pm_unavailable_warned = True  # the probe already said why, and that Node is used
         return None
 
     _quiet_stderr_enter()

@@ -123,10 +123,14 @@ def load_module_tree(docs_dir: str) -> dict[str, Any]:
 def read_layout(docs_dir: str) -> str:
     """Layout recorded in ``metadata.json``.
 
-    Docs without a recorded layout predate hierarchical output, so they are
-    flat.
+    Docs whose metadata records no layout predate hierarchical output, so they
+    are flat. Without ``metadata.json`` (new docs, or a run that stopped before
+    writing it) the default applies.
     """
-    metadata = _load_json(os.path.join(docs_dir, METADATA_FILENAME))
+    path = os.path.join(docs_dir, METADATA_FILENAME)
+    if not os.path.exists(path):
+        return DEFAULT_LAYOUT
+    metadata = _load_json(path)
     info = metadata.get("generation_info") if isinstance(metadata, dict) else None
     layout = info.get("layout") if isinstance(info, dict) else None
     return layout if layout in LAYOUTS else LAYOUT_FLAT
@@ -134,9 +138,7 @@ def read_layout(docs_dir: str) -> str:
 
 def docs_layout(docs_dir: str) -> str:
     """Layout of existing docs (see :func:`read_layout`), or the default for new ones."""
-    if os.path.exists(os.path.join(docs_dir, METADATA_FILENAME)):
-        return read_layout(docs_dir)
-    return DEFAULT_LAYOUT
+    return read_layout(docs_dir)
 
 
 def _candidate_relpaths(name: str, module_tree: dict[str, Any] | None) -> list[str]:

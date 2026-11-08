@@ -50,7 +50,12 @@ from codewiki.src.be.updater.tree_repair import (
     RoutingDecision,
     repair_tree,
 )
-from codewiki.src.be.doc_layout import organize_docs, read_layout
+from codewiki.src.be.doc_layout import (
+    METADATA_FILENAME,
+    config_layout,
+    organize_docs,
+    read_layout,
+)
 from codewiki.src.config import MODULE_TREE_FILENAME, Config
 from codewiki.src.utils import file_manager
 
@@ -80,7 +85,9 @@ class IncrementalUpdater:
         # Updated pages keep the layout the docs were generated in. The config
         # is shared with the doc generator and backend (their agents write the
         # pages), so align it rather than keeping a second source of truth.
-        self.layout = read_layout(self.docs_dir)
+        # No metadata.json: a run stopped before writing it, so keep this run's layout.
+        has_metadata = os.path.exists(os.path.join(self.docs_dir, METADATA_FILENAME))
+        self.layout = read_layout(self.docs_dir) if has_metadata else config_layout(config)
         if getattr(config, "layout", None) != self.layout:
             logger.info("Docs use the %s layout; updating them in place", self.layout)
             config.layout = self.layout

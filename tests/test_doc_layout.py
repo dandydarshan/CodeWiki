@@ -74,7 +74,8 @@ def test_doc_relpaths_cover_tree_and_overview():
 
 
 def test_read_layout_defaults_to_flat_for_old_docs(tmp_path):
-    assert L.read_layout(str(tmp_path)) == "flat"
+    # No metadata.json at all is new docs or an unfinished run, not old docs
+    assert L.read_layout(str(tmp_path)) == "hierarchical"
     (tmp_path / "metadata.json").write_text(json.dumps({"generation_info": {"language": None}}))
     assert L.read_layout(str(tmp_path)) == "flat"
     assert L.docs_layout(str(tmp_path)) == "flat"
@@ -291,7 +292,9 @@ def test_updater_pages_follow_recorded_layout(tmp_path):
     assert not (tmp_path / "auth").exists()
 
     flat = tmp_path / "flat"
-    _setup(flat, layout=None)  # old docs: no layout recorded -> flat
+    _setup(flat, layout=None)
+    # old docs: metadata.json without a layout -> flat
+    (flat / "metadata.json").write_text(json.dumps({"generation_info": {}}))
     assert P.page_rel(str(flat), "store") == "store.md"
 
 

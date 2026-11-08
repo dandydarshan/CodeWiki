@@ -6,6 +6,16 @@ uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **`--update` after a crashed run turned the docs flat.** A run that stopped
+  before writing `metadata.json` left docs with no recorded layout, which
+  `--update` read as old flat docs: it moved the existing pages out of their
+  folders and recorded the flat layout, so every later update stayed flat.
+  Docs without `metadata.json` now keep the layout of the run. Docs already
+  turned flat this way go back into folders with one `codewiki generate`
+  (without `--update`); later updates keep the folders.
+
 ## [2.1.2] - 2026-11-08
 
 ### Fixed

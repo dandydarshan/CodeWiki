@@ -196,6 +196,17 @@ def test_no_change_short_circuits(tmp_path):
     assert (docs / "storage.md").exists()
 
 
+def test_docs_without_metadata_keep_the_run_layout(tmp_path):
+    # A crashed run moved metadata.json aside; the resumed run must not turn flat
+    docs, config, prev = _setup(tmp_path)
+    (docs / "metadata.json").unlink()
+    config.layout = "hierarchical"
+    upd = IncrementalUpdater(
+        config, FakeBackend(), _generator(config, FakeBackend()), UpdateOptions()
+    )
+    assert upd.layout == config.layout == "hierarchical"
+
+
 def test_missing_old_graph_is_a_detector_failure(tmp_path):
     docs, config, prev = _setup(tmp_path, with_graph=False)
     backend = FakeBackend()

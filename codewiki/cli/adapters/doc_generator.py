@@ -390,9 +390,13 @@ class CLIDocumentationGenerator:
                 )
                 self._drop_docs_backup()  # updated in place: the backup is not needed
                 return
-            # full_fallback / detector_failure: preserve the old docs, rebuild from scratch
-            self._move_docs_aside()
-            components, leaf_nodes = doc_generator.graph_builder.build_dependency_graph()
+            if outcome == "resume":
+                # Resume below: the cached module tree is reused and existing pages kept.
+                self._drop_docs_backup()
+            else:
+                # full_fallback / detector_failure: preserve the old docs, rebuild from scratch
+                self._move_docs_aside()
+                components, leaf_nodes = doc_generator.graph_builder.build_dependency_graph()
 
         # Stage 2: Module Clustering
         self.progress_tracker.start_stage(2, "Module Clustering")
@@ -611,6 +615,17 @@ class CLIDocumentationGenerator:
                 + "\n  ".join(e[:300] for e in record.errors)
             )
         working_dir = str(self.output_dir.absolute())
+        if record.outcome == "no_change":
+            missing = doc_generator.validate_generated_docs(working_dir)
+            if missing:
+                # The code matches the saved graph but pages are missing: an earlier run
+                # stopped before writing them. Generate those, keeping the pages that exist.
+                self.progress_tracker.note(
+                    f"No code changes, but {len(missing)} module page(s) are missing "
+                    "(an earlier run did not finish); generating them."
+                )
+                self.progress_tracker.complete_stage()
+                return "resume"
         if record.outcome in ("incremental", "no_change"):
             self._crosslink(doc_generator, working_dir, components)
             # create_documentation_metadata rewrites metadata.json from scratch;

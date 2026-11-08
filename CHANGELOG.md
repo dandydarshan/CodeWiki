@@ -6,6 +6,22 @@ uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [2.1.2] - 2026-11-08
+
+### Fixed
+
+- **`generate` exited silently when the first agent checked a Mermaid
+  diagram** on Python 3.14.0–3.14.3, on every OS. PythonMonkey's wheels are
+  built for 3.14.4+ and crash the process on their first awaited promise
+  ([PythonMonkey #515](https://github.com/Distributive-Network/PythonMonkey/issues/515)).
+  CodeWiki now tries PythonMonkey once in a child process; if that crashes,
+  it says to upgrade Python and checks diagrams with Node.js for the run.
+  Where PythonMonkey works it is used as before.
+- **`--update` could not resume an unfinished run.** After a full rebuild
+  stopped before writing pages, the next `--update` found no code changes and
+  failed on every rerun because the pages were missing. It now generates the
+  missing pages and keeps the ones already written.
+
 ## [2.1.1] - 2026-11-07
 
 ### Fixed

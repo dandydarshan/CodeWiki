@@ -4,6 +4,7 @@ import importlib.util
 import io
 import logging
 import os
+import platform
 import re
 import shutil
 import subprocess
@@ -232,7 +233,7 @@ async def _try_pythonmonkey_parse(diagram_content: str) -> str | None:
     PythonMonkey itself is unusable (failed import or lost event loop) so the
     caller can fall back to system Node.js.
     """
-    global _PYTHONMONKEY_BROKEN
+    global _PYTHONMONKEY_BROKEN, _pm_unavailable_warned
     if _PYTHONMONKEY_BROKEN:
         _warn_pythonmonkey_unavailable_once()
         return None
@@ -247,6 +248,10 @@ async def _try_pythonmonkey_parse(diagram_content: str) -> str | None:
     if not (on_main_thread or via_main_loop):
         # e.g. the web app's worker thread: no main-thread loop to hand off to.
         _warn_pythonmonkey_unavailable_once()
+        return None
+    if not await _run_in_daemon_thread(_pythonmonkey_probe_passes):
+        _PYTHONMONKEY_BROKEN = True
+        _pm_unavailable_warned = True  # the probe already said why, and that Node is used
         return None
 
     _quiet_stderr_enter()
@@ -278,6 +283,61 @@ async def _try_pythonmonkey_parse(diagram_content: str) -> str | None:
         return None
     finally:
         _quiet_stderr_exit()
+
+
+# A PythonMonkey wheel built against other CPython headers crashes the process on its
+# first awaited promise (e.g. Python 3.14.0-3.14.3 with wheels built for 3.14.4+, see
+# https://github.com/Distributive-Network/PythonMonkey/issues/515). A native crash
+# raises nothing to fall back on, so the real parse is tried once in a child process.
+_PROBE_SCRIPT = """
+import asyncio, contextlib, io
+with contextlib.redirect_stdout(io.StringIO()):
+    from mermaid_parser.parser import parse_mermaid_py
+async def main():
+    for source in ["flowchart TD\\n  A --> B\\n", "flowchart TD\\n  A --> --> B(\\n"] * 2:
+        try:
+            await parse_mermaid_py(source)
+        except Exception:
+            pass  # a rejected diagram is fine; only a crash matters
+asyncio.run(main())
+"""
+_PROBE_TIMEOUT_SECONDS = 120.0  # PythonMonkey's first import takes seconds on Windows
+_probe_lock = threading.Lock()
+_probe_result: bool | None = None
+
+
+def _native_crash(returncode: int) -> bool:
+    """Killed by a signal (POSIX) or an NTSTATUS error such as an access violation (Windows)."""
+    return returncode < 0 or (returncode & 0xFFFFFFFF) >= 0xC0000000
+
+
+def _pythonmonkey_probe_passes() -> bool:
+    """Whether PythonMonkey parses without crashing here, checked once per process."""
+    global _probe_result
+    with _probe_lock:
+        if _probe_result is None:
+            try:
+                result = subprocess.run(
+                    [sys.executable, "-c", _PROBE_SCRIPT],
+                    capture_output=True,
+                    timeout=_PROBE_TIMEOUT_SECONDS,
+                )
+                # Only a native crash counts: a Python error (say, PythonMonkey is not
+                # installed) is raised and handled the same way in this process.
+                _probe_result = not _native_crash(result.returncode)
+                if not _probe_result:
+                    logger.warning(
+                        "PythonMonkey failed a test parse (exit code %#x) and would crash "
+                        "CodeWiki: it does not support Python %s. Upgrade Python to the "
+                        "latest patch release to use it; Mermaid diagrams are checked with "
+                        "Node.js meanwhile.",
+                        result.returncode & 0xFFFFFFFF,
+                        platform.python_version(),
+                    )
+            except (OSError, subprocess.TimeoutExpired) as e:
+                logger.warning("PythonMonkey test parse did not finish (%s); using Node.js.", e)
+                _probe_result = False
+        return _probe_result
 
 
 async def _parse_with_pythonmonkey(diagram_content: str) -> None:

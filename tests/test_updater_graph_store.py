@@ -6,6 +6,8 @@ import json
 import os
 import time
 
+import pytest
+
 from codewiki.src.be.updater.graph_store import (
     find_any_graph_file,
     graph_file_path,
@@ -211,6 +213,47 @@ def test_update_removes_its_scratch_copy_of_the_previous_graph(tmp_path, monkeyp
     )
     asyncio.run(gen._run_incremental_update(None, doc_generator, None, str(prev), {}, []))
     assert not prev.exists()  # was half of a user's 85 MB docs folder
+
+
+def test_no_change_with_missing_pages_resumes_generation(tmp_path, monkeypatch):
+    """A full rebuild that crashed saved the new graph but wrote no pages and no
+    metadata.json; the next --update diffs to no_change and must not fail on the
+    missing pages, or every rerun hits the same dead end."""
+    import asyncio
+    from pathlib import Path
+    from types import SimpleNamespace
+
+    import codewiki.src.be.updater.orchestrator as orchestrator
+    from codewiki.cli.adapters.doc_generator import CLIDocumentationGenerator
+
+    class Updater:
+        def __init__(self, *a):
+            self.record = None
+
+        async def run(self, *a):
+            return SimpleNamespace(outcome="no_change", summary=lambda: {}, errors=[])
+
+    monkeypatch.setattr(orchestrator, "IncrementalUpdater", Updater)
+    gen = object.__new__(CLIDocumentationGenerator)
+    gen.output_dir, gen.repo_path, gen.commit_id, gen.verbose = (
+        Path(tmp_path),
+        tmp_path,
+        "c2",
+        False,
+    )
+    notes = []
+    gen.progress_tracker = SimpleNamespace(
+        start_stage=lambda *a: None, complete_stage=lambda: None, note=notes.append
+    )
+    doc_generator = SimpleNamespace(
+        backend=None,
+        usage_ledger=SimpleNamespace(in_phase=lambda phase: _null_context()),
+        validate_generated_docs=lambda wd: ["billing-ui-app-core", "overview"],
+        create_documentation_metadata=lambda *a: pytest.fail("must not mark the docs complete"),
+    )
+    outcome = asyncio.run(gen._run_incremental_update(None, doc_generator, None, None, {}, []))
+    assert outcome == "resume"
+    assert "2 module page(s) are missing" in notes[0]
 
 
 def _null_context():

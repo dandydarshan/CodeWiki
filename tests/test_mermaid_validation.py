@@ -268,3 +268,61 @@ def test_issue_exact_reproduction_repairs_only_diamond(parser):
     assert report.content == markdown(case["repaired"])
     assert not report.errors and len(report.repairs) == 1
     assert len(parser) == 2
+
+
+def _fresh_probe(monkeypatch, returncode):
+    """Reset the once-per-process probe and fake its child process exit code."""
+    import subprocess
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(utils, "_probe_result", None)
+    monkeypatch.setattr(utils, "_PYTHONMONKEY_BROKEN", False)
+    monkeypatch.setattr(utils, "_pm_unavailable_warned", False)
+    runs = []
+
+    def run(*a, **k):
+        runs.append(a)
+        return SimpleNamespace(returncode=returncode)
+
+    monkeypatch.setattr(subprocess, "run", run)
+    return runs
+
+
+@pytest.mark.parametrize("returncode", [-11, 0xC0000005])  # segfault; Windows access violation
+def test_crashing_pythonmonkey_falls_back_without_parsing_in_process(
+    monkeypatch, caplog, returncode
+):
+    """Python 3.14.0-3.14.3: PythonMonkey's wheels crash the process on the first parse
+    (PythonMonkey issue #515). The probe sees it in a child, so CodeWiki uses Node."""
+    runs = _fresh_probe(monkeypatch, returncode)
+    caplog.set_level("WARNING")
+
+    async def must_not_run(source):
+        pytest.fail("PythonMonkey must not parse in-process after a crashing probe")
+
+    monkeypatch.setattr(utils, "_parse_with_pythonmonkey", must_not_run)
+    assert asyncio.run(utils._try_pythonmonkey_parse("flowchart TD\n  A --> B\n")) is None
+    assert utils._PYTHONMONKEY_BROKEN
+    asyncio.run(utils._try_pythonmonkey_parse("flowchart TD\n  A --> B\n"))
+    assert len(runs) == 1  # probed once, not per diagram
+    warnings = [r.getMessage() for r in caplog.records if r.levelname == "WARNING"]
+    assert len(warnings) == 1 and "Upgrade Python" in warnings[0], warnings
+
+
+def test_python_error_in_probe_is_not_a_crash(monkeypatch):
+    """PythonMonkey not installed exits 1 with an ImportError: handled in-process as before."""
+    _fresh_probe(monkeypatch, 1)
+    assert utils._pythonmonkey_probe_passes()
+
+
+def test_probe_passes_where_pythonmonkey_works(monkeypatch):
+    import importlib.util
+
+    if importlib.util.find_spec("pythonmonkey") is None:
+        pytest.skip("PythonMonkey is not installed")
+    import sys
+
+    if sys.version_info[:2] == (3, 14) and sys.version_info.micro < 4:
+        pytest.skip("PythonMonkey crashes on Python 3.14.0-3.14.3 (issue #515)")
+    monkeypatch.setattr(utils, "_probe_result", None)
+    assert utils._pythonmonkey_probe_passes()

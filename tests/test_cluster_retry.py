@@ -40,7 +40,7 @@ THRESHOLD = get_clustering_input_token_count([i for i in IDS if i.startswith("d0
 
 
 def _config() -> Config:
-    return Config.from_cli(
+    cfg = Config.from_cli(
         repo_path="/tmp/repo",
         output_dir="/tmp/out",
         llm_base_url="http://localhost",
@@ -50,6 +50,8 @@ def _config() -> Config:
         max_token_per_module=THRESHOLD,
         min_token_per_module=50,
     )
+    cfg.cluster_batch_cache = False
+    return cfg
 
 
 def _gateway(calls: list[int], drop_above: int, tagged: bool = True):
